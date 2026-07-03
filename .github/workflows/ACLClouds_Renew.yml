@@ -24,8 +24,7 @@ jobs:
           python-version: '3.12'
 
       - name: 安装依赖
-        run: pip install requests
-             pip install playwright
+        run: pip install requests playwright
              playwright install chromium
 
       - name: 启用 WARP 网络
