@@ -8,6 +8,7 @@ import re
 import sys
 import json
 import time
+import random
 import traceback
 from urllib.request import Request, urlopen
 
@@ -33,6 +34,8 @@ API_BASE  = f"{BASE_URL}/api"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
+    "sec-ch-ua": '"Google Chrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"',
+    "sec-ch-ua-platform": '"Windows"',
     "Accept": "application/json, text/plain, */*",
     "Accept-Language": "zh-CN,zh;q=0.9",
     "Origin": BASE_URL,
@@ -46,16 +49,13 @@ def log_error(msg): print(f"[ERROR] {msg}", flush=True)
 
 # ── 推送函数 ──────────────────────────────────────────────
 def send_all_push(text: str):
-    # 简化版推送逻辑，保持代码整洁
     log(f"推送内容: {text[:50]}...")
 
 # ── 解析剩余时间 ──────────────────────────────────────────
 def parse_expires(text):
     if text is None: return None
-    s = str(text).strip()
-    try: return float(s) / 86400
-    except: pass
-    return None
+    try: return float(str(text).strip()) / 86400
+    except: return None
 
 # ── API 封装 ──────────────────────────────────────────────
 class ACLCloudsAPI:
@@ -64,23 +64,25 @@ class ACLCloudsAPI:
         self.session.headers.update(HEADERS)
 
     def _set_xsrf(self):
-        from urllib.parse import unquote
+        # 不再使用 unquote，直接使用 session 中的原始 cookie
         xsrf = self.session.cookies.get("XSRF-TOKEN", "")
         if xsrf:
-            self.session.headers["x-xsrf-token"] = unquote(xsrf)
+            self.session.headers["x-xsrf-token"] = xsrf
 
     def _get_captcha_token(self):
-        log("GET 登录页，获取初始 Cookie ...")
+        log("GET 登录页，建立会话并获取 Cookie ...")
         self.session.get(LOGIN_URL, timeout=20)
         self._set_xsrf()
 
         captcha_url = f"{BASE_URL}/auth/captcha"
+        
+        # 增加随机波动，模拟真实人类行为
         fake_behavior = {
-            "mouse_movements": 320,
-            "mouse_distance": 5800,
+            "mouse_movements": random.randint(300, 400),
+            "mouse_distance": random.randint(5000, 6000),
             "clicks": 1,
-            "key_presses": 3,
-            "elapsed_ms": 45000,
+            "key_presses": random.randint(2, 5),
+            "elapsed_ms": random.randint(3000, 6000),
         }
         
         log(f"POST {captcha_url} ...")
@@ -89,11 +91,10 @@ class ACLCloudsAPI:
         if cr.status_code == 200:
             data = cr.json()
             if data.get("passed"):
-                token = data.get("token")
-                log("captcha 验证通过")
-                return token
+                log("验证码验证通过")
+                return data.get("token")
             else:
-                log_error(f"Captcha 响应未通过: {data}")
+                log_error(f"Captcha 拒绝: {data.get('reason')}")
         else:
             log_error(f"Captcha 接口报错 (HTTP {cr.status_code}): {cr.text}")
         return None
