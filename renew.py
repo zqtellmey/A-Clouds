@@ -1,66 +1,54 @@
 #!/usr/bin/env python3
+import asyncio
 import os
-import sys
-import traceback
 import requests
-import json
+from playwright.async_api import async_playwright
 
 # 环境变量
-COOKIES_STR = os.environ.get("ACL_COOKIES", "").strip()
-# 将你抓包到的 JSON 完整载荷放进这个环境变量
-GATE_PAYLOAD = os.environ.get("ACL_GATE_PAYLOAD", "{}").strip()
-BASE_URL    = "https://dash.aclclouds.com"
+EMAIL = os.environ.get("ACLCLOUDS_EMAIL", "").strip()
+PASSWORD = os.environ.get("ACLCLOUDS_PASSWORD", "").strip()
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
 
-def parse_cookies(cookie_str):
-    cookie_dict = {}
-    for item in cookie_str.split(';'):
-        if '=' in item:
-            key, val = item.split('=', 1)
-            cookie_dict[key.strip()] = val.strip()
-    return cookie_dict
+def send_tg_photo(caption, photo_path):
+    """使用 requests 发送图片到 Telegram"""
+    if not TG_BOT_TOKEN or not TG_CHAT_ID: return
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+    with open(photo_path, 'rb') as f:
+        files = {'photo': f}
+        data = {'chat_id': TG_CHAT_ID, 'caption': caption}
+        requests.post(url, data=data, files=files)
 
-class ACLCloudsAPI:
-    def __init__(self, cookies_dict):
-        self.session = requests.Session()
-        self.session.cookies.set("aclclouds_session", cookies_dict.get("aclclouds_session"), domain="dash.aclclouds.com")
-        self.session.cookies.set("XSRF-TOKEN", cookies_dict.get("XSRF-TOKEN"), domain="dash.aclclouds.com")
-        self.session.headers.update({
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-            "Accept": "application/json",
-            "X-XSRF-TOKEN": cookies_dict.get("XSRF-TOKEN")
-        })
+async def run_debug():
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
+        page = await context.new_page()
 
-    def renew_project(self, project):
-        identifier = project.get("identifier")
-        url = f"{BASE_URL}/api/client/servers/{identifier}/upgrade/renew"
-        
-        # 直接使用抓包得到的载荷
-        payload = json.loads(GATE_PAYLOAD)
-        
-        print(f"[INFO] 正在提交续期请求...", flush=True)
-        r = self.session.post(url, json=payload, timeout=20)
-        
-        if r.status_code == 200:
-            return True
-        else:
-            raise RuntimeError(f"续期失败 (HTTP {r.status_code}): {r.text}")
+        # 1. 访问并截图
+        await page.goto("https://dash.aclclouds.com/auth/login")
+        await page.screenshot(path="step1_login_page.png")
+        send_tg_photo("进入登录页", "step1_login_page.png")
 
-    def get_projects(self):
-        r = self.session.get(f"{BASE_URL}/api/client", timeout=20)
-        return [item.get("attributes") for item in r.json().get("data", []) if item.get("attributes")]
+        # 2. 填写信息
+        await page.fill('input[type="email"]', EMAIL)
+        await page.fill('input[type="password"]', PASSWORD)
 
-def run():
-    if not COOKIES_STR or not GATE_PAYLOAD:
-        raise RuntimeError("请在 Secrets 中配置 ACL_COOKIES 和 ACL_GATE_PAYLOAD")
-    
-    api = ACLCloudsAPI(parse_cookies(COOKIES_STR))
-    for project in api.get_projects():
-        print(f"[INFO] 正在续期: {project.get('name')} ...", flush=True)
-        api.renew_project(project)
-        print(f"[INFO] ✅ 成功", flush=True)
+        # 3. 点击验证码并截图确认
+        captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
+        await captcha.click()
+        await asyncio.sleep(2)
+        await page.screenshot(path="step2_after_captcha.png")
+        send_tg_photo("点击验证码后截图", "step2_after_captcha.png")
+
+        # 4. 提交登录截图
+        await page.click('button[type="submit"]')
+        await page.wait_for_load_state("networkidle")
+        await asyncio.sleep(2)
+        await page.screenshot(path="step3_after_login.png")
+        send_tg_photo("登录尝试结果", "step3_after_login.png")
+
+        await browser.close()
 
 if __name__ == "__main__":
-    try: run()
-    except Exception:
-        traceback.print_exc()
-        sys.exit(1)
+    asyncio.run(run_debug())
