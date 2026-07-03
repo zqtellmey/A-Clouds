@@ -5,11 +5,27 @@ ACLClouds 自动续期脚本 (完整修正版)
 
 import os
 import sys
+import subprocess
+
+# 强制确保 requests 已安装
+def install_requirements():
+    try:
+        import requests
+    except ImportError:
+        print("[INFO] 检测到缺少 requests 库，正在安装...", flush=True)
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "requests"])
+        print("[INFO] requests 安装完成，继续运行脚本...", flush=True)
+
+install_requirements()
+
+# 此时 requests 已经确保安装，可以正常导入
+import requests
 import json
 import time
 import random
 import traceback
-import requests
+
+# ... (后续代码保持不变)
 
 # ── 环境变量 ─────────────────────────────────────────────
 EMAIL             = os.environ.get("ACLCLOUDS_EMAIL", "").strip()
