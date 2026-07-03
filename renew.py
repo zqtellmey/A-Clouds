@@ -1,10 +1,20 @@
 #!/usr/bin/env python3
 import asyncio
 import os
+import requests
 from playwright.async_api import async_playwright
 
 EMAIL = os.environ.get("ACLCLOUDS_EMAIL", "").strip()
 PASSWORD = os.environ.get("ACLCLOUDS_PASSWORD", "").strip()
+TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
+TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
+
+def send_tg_photo(caption, photo_path):
+    if not TG_BOT_TOKEN or not TG_CHAT_ID or not os.path.exists(photo_path):
+        return
+    url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
+    with open(photo_path, 'rb') as f:
+        requests.post(url, data={'chat_id': TG_CHAT_ID, 'caption': caption}, files={'photo': f})
 
 async def run_renew():
     async with async_playwright() as p:
@@ -12,50 +22,36 @@ async def run_renew():
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
         page = await context.new_page()
 
-        print("[INFO] 访问登录页...")
+        # 1. 访问登录页
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
-        
-        # 使用 ID 定位输入框 (最稳健)
-        print("[INFO] 填充凭证...")
+        await page.screenshot(path="step1.png")
+        send_tg_photo("已进入登录页", "step1.png")
+
+        # 2. 填充并点击
         await page.locator("#username").fill(EMAIL)
         await page.locator("#password").fill(PASSWORD)
+        await page.locator('div.auth-captcha-inner[role="checkbox"]').click()
         
-        # 使用 role 和 class 定位验证码 checkbox
-        # .auth-captcha-inner[role="checkbox"] 是你之前确认过的，结合它内部的 checkbox class
-        captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
-        print("[INFO] 点击验证码...")
-        await captcha.click()
+        # 3. 等待通过并截图
+        await asyncio.sleep(3) # 缓冲
+        await page.screenshot(path="step2.png")
+        send_tg_photo("点击验证码后", "step2.png")
         
-        # 等待验证状态变更为已勾选
-        await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=15000)
-        print("[INFO] ✅ 验证码已通过")
-
-        # 使用类型定位按钮 (稳健，不依赖 XPATH 路径)
-        print("[INFO] 提交登录...")
+        await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=10000)
+        
+        # 4. 提交
         await page.locator('button[type="submit"]').click()
-        
-        # 等待跳转完成
         await page.wait_for_load_state("networkidle")
         
-        # 验证是否进入后台
+        # 5. 最终结果
+        await page.screenshot(path="step3.png")
+        send_tg_photo("登录结果截图", "step3.png")
+        
         if "dashboard" in page.url or "client" in page.url:
-            print("[INFO] 登录成功，执行续期...")
-            
-            # 使用登录后的上下文直接调用 API
-            projects_resp = await context.request.get("https://dash.aclclouds.com/api/client")
-            projects = projects_resp.json().get("data", [])
-
-            for project in projects:
-                p_id = project['attributes']['identifier']
-                # 如果还需要验证码 token，这里可以从 cookies 或之前的响应提取
-                res = await context.request.post(f"https://dash.aclclouds.com/api/client/servers/{p_id}/upgrade/renew")
-                if res.ok:
-                    print(f"[INFO] ✅ 项目 {p_id} 续期成功")
-                else:
-                    print(f"[ERROR] 项目 {p_id} 续期失败: {await res.text()}")
+            print("[INFO] 登录成功")
+            # 此处执行续期...
         else:
-            print("[ERROR] 登录失败，截图保存...")
-            await page.screenshot(path="login_failed.png")
+            print("[ERROR] 登录页面未跳转")
 
         await browser.close()
 
