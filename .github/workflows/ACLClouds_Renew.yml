@@ -1,0 +1,53 @@
+name: ACLClouds 自动续期
+
+on:
+  workflow_dispatch:        # 支持手动触发
+  schedule:
+    - cron: '0 0 * * *'    # 每天 UTC 时间 0 点运行
+
+jobs:
+  renew:
+    name: 执行续期检测
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: read
+    timeout-minutes: 10
+
+    steps:
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: pip install requests
+
+      - name: 启用 WARP 网络
+        uses: fscarmen/warp-on-actions@v1.3
+        with:
+          stack: dual
+          mode: client
+
+      - name: 运行续期脚本
+        env:
+          ACL_COOKIES: ${{ secrets.ACL_COOKIES }}
+        run: |
+          python renew.py 2>&1 | tee renew.log
+
+      - name: 删除当前 workflow 的旧 runs（保留最近2个）
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          WORKFLOW_ID=$(gh api repos/${{ github.repository }}/actions/workflows \
+            --jq '.workflows[] | select(.name == "${{ github.workflow }}") | .id')
+          gh api "repos/${{ github.repository }}/actions/workflows/${WORKFLOW_ID}/runs" \
+            --paginate \
+            --jq '.workflow_runs[2:][] | .id' \
+            | while read id; do
+                gh api -X DELETE "repos/${{ github.repository }}/actions/runs/$id"
+              done
