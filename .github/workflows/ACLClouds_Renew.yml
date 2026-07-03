@@ -1,9 +1,9 @@
 name: ACLClouds 自动续期
 
 on:
-  workflow_dispatch:        # 支持手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'    # 每天 UTC 时间 0 点运行
+    - cron: '0 0 * * *'
 
 jobs:
   renew:
@@ -12,7 +12,7 @@ jobs:
     permissions:
       actions: write
       contents: read
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: 拉取仓库
@@ -24,8 +24,9 @@ jobs:
           python-version: '3.12'
 
       - name: 安装依赖
-        run: pip install requests playwright
-             playwright install chromium
+        run: |
+          pip install requests playwright
+          playwright install chromium
 
       - name: 启用 WARP 网络
         uses: fscarmen/warp-on-actions@v1.3
@@ -35,11 +36,14 @@ jobs:
 
       - name: 运行续期脚本
         env:
-          ACL_COOKIES: ${{ secrets.ACL_COOKIES }}
+          ACLCLOUDS_EMAIL: ${{ secrets.ACLCLOUDS_EMAIL }}
+          ACLCLOUDS_PASSWORD: ${{ secrets.ACLCLOUDS_PASSWORD }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: |
           python renew.py 2>&1 | tee renew.log
 
-      - name: 删除当前 workflow 的旧 runs（保留最近2个）
+      - name: 删除当前 workflow 的旧 runs
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
