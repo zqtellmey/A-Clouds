@@ -2,10 +2,10 @@
 import asyncio
 import os
 import requests
-import re
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright
 
+# 环境变量
 EMAIL = os.environ.get("ACLCLOUDS_EMAIL", "").strip()
 PASSWORD = os.environ.get("ACLCLOUDS_PASSWORD", "").strip()
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
@@ -17,13 +17,12 @@ def send_tg_msg(text):
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"})
 
 def parse_remaining_days(expires_str):
-    """解析日期并返回剩余天数"""
     try:
         dt = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
         remaining = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
         return remaining
     except:
-        return 999  # 解析失败默认不续期
+        return 999 
 
 async def handle_captcha(page):
     captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
@@ -37,18 +36,20 @@ async def run_renew():
         context = await browser.new_context(user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36")
         page = await context.new_page()
 
-        # 1. 登录 (焊死部分)
+        # --- 以下为焊死的登录部分 ---
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.locator("#username").fill(EMAIL)
         await page.locator("#password").fill(PASSWORD)
         await handle_captcha(page)
         await page.locator("#password").press("Enter")
-        await page.wait_for_url("**/dashboard*", timeout=20000)
-        
-        # 2. 获取数据
+        await page.wait_for_load_state("networkidle")
+        # --- 登录结束 ---
+
+        # 1. 获取服务器状态
         status_resp = await context.request.get("https://dash.aclclouds.com/api/client")
         servers = status_resp.json().get("data", [])
         
+        # 2. 进入项目操作页
         await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
         
         for server in servers:
@@ -58,9 +59,9 @@ async def run_renew():
             
             report = f"<b>服务器: {s_name}</b>\n剩余时间: {remaining:.2f} 天"
             
-            # 判断是否需要操作 (小于 0.0833 天即 2 小时)
+            # 判断逻辑：小于 0.0833 天（2小时）进行操作
             if remaining < 0.0833:
-                # 查找按钮并交互
+                # 使用鲁棒性强的定位器
                 reactivate_btn = page.locator('button:has-text("Reactivate")')
                 renew_btn = page.locator('button:has-text("Renew")')
                 
@@ -73,7 +74,7 @@ async def run_renew():
                     await handle_captcha(page)
                     report += "\n状态: ✅ <b>已执行 Renew</b>"
                 else:
-                    report += "\n状态: ⚠️ 无法找到操作按钮"
+                    report += "\n状态: ⚠️ 按钮未找到"
             else:
                 report += "\n状态: ℹ️ 无需操作"
             
