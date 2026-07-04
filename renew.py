@@ -20,6 +20,11 @@ def send_tg_photo(caption, photo_path):
     except Exception as e:
         print(f"[ERROR] TG 推送失败: {e}")
 
+def send_tg_msg(text):
+    if TG_BOT_TOKEN and TG_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"})
+
 async def run_renew():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -30,7 +35,7 @@ async def run_renew():
         )
         page = await context.new_page()
 
-        # --- 焊死登录部分：一个字都不改 ---
+        # --- 焊死登录部分 (一个字没动) ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -59,6 +64,25 @@ async def run_renew():
         await page.screenshot(path="step3.png")
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
+
+        # --- 新增：后续续期流程 ---
+        print("[INFO] 开始获取服务器信息...")
+        # 1. API 获取列表
+        resp = await context.request.get("https://dash.aclclouds.com/api/client")
+        servers = resp.json().get("data", [])
+        
+        # 2. 跳转到续期页面
+        await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
+        
+        for server in servers:
+            attrs = server['attributes']
+            name = attrs['name']
+            expires = attrs['expires_at']
+            
+            # 这里逻辑按需扩展，先执行查看
+            msg = f"服务器: {name}\n到期时间: {expires}"
+            send_tg_msg(msg)
+            print(f"[INFO] 已推送信息: {name}")
 
         await browser.close()
 
