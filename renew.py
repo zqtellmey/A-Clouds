@@ -88,17 +88,22 @@ async def run_renew():
                 report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
                 send_tg_msg(report)
                 
-                # --- 操作阶段：找到并点击，走登录时的验证逻辑 ---
+                # --- 操作阶段：精确处理弹窗验证 ---
                 renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                 if await renew_btn.count() > 0:
                     print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备点击")
                     await renew_btn.scroll_into_view_if_needed()
                     await renew_btn.evaluate("el => el.click()")
                     
-                    # 使用登录时焊死的逻辑处理验证码
-                    print("[INFO] 开始处理 Renew 人机验证...")
-                    await page.locator('div.auth-captcha-inner[role="checkbox"]').click()
-                    await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=15000)
+                    # 使用更精确的选择器，专门针对置顶 Dialog 里的 checkbox
+                    captcha_locator = page.locator('div[role="dialog"] .auth-captcha-inner[role="checkbox"]')
+                    await captcha_locator.wait_for(state="visible", timeout=10000)
+                    await captcha_locator.click()
+                    
+                    # 等待该 checkbox 状态变更为 checked
+                    await captcha_locator.wait_for(state="attached")
+                    # 直接监听属性变化，确保点击成功
+                    await page.wait_for_selector('div[role="dialog"] .auth-captcha-inner[aria-checked="true"]', timeout=15000)
                     
                     await page.screenshot(path="renew_success.png")
                     send_tg_photo(f"已完成 {s_name} 的 Renew 操作", "renew_success.png")
