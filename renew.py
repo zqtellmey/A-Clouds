@@ -77,12 +77,10 @@ async def run_renew():
             print(f"[INFO] 发现 {count} 个 Reactivate 按钮，优先执行...")
             for i in range(count):
                 await reactivate_btns.nth(i).click()
-                # 触发人机验证逻辑
                 await asyncio.sleep(2)
                 checkbox = page.locator('div[role="checkbox"]:has-text("I am not a robot")')
                 if await checkbox.count() > 0: await checkbox.click()
                 await asyncio.sleep(2)
-                # (此处假设已点击文字验证)
                 await page.screenshot(path=f"reactivate_{i}.png")
                 send_tg_photo(f"已执行 Reactivate 动作 {i+1}", f"reactivate_{i}.png")
                 await asyncio.sleep(2)
@@ -100,10 +98,6 @@ async def run_renew():
                 s_name = attrs['name']
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
-                
-                # 推送当前状态
-                status_text = f"{hours_left:.2f} 小时" if hours_left >= 2 else "⚠️ 小于2小时"
-                send_tg_msg(f"服务器: {s_name}\n剩余时间: {status_text}")
                 
                 # 若小于2小时，则去找 Renew 按钮
                 if hours_left < 2:
@@ -132,6 +126,11 @@ async def run_renew():
                                 if n_s['attributes']['name'] == s_name:
                                     n_h = (datetime.fromisoformat(n_s['attributes']['expires_at']) - now).total_seconds() / 3600
                                     send_tg_msg(f"服务器: {s_name}\n状态: ✅ 续期后剩余时间: {n_h:.2f} 小时")
+                    else:
+                        print(f"[LOG] 需续期但未找到 Renew 按钮")
+                else:
+                    # 不满足续期条件
+                    send_tg_msg(f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ℹ️ 无需续期操作")
         
         await browser.close()
 
