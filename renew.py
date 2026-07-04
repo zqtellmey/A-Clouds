@@ -2,7 +2,6 @@
 import asyncio
 import os
 import requests
-from datetime import datetime, timezone
 from playwright.async_api import async_playwright
 
 # 环境变量读取
@@ -26,12 +25,12 @@ async def run_renew():
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36",
-            viewport={'width': 1920, 'height': 1080),
+            viewport={'width': 1920, 'height': 1080},
             locale="zh-CN"
         )
         page = await context.new_page()
 
-        # --- 焊死登录部分 (一个字都没改，确保逻辑完全一致) ---
+        # --- 焊死登录部分 (一个字都没改) ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -51,23 +50,22 @@ async def run_renew():
         await page.locator("#password").press("Enter")
         
         try:
-            # 增加一点点等待时间确保跳转完成
-            await page.wait_for_load_state("networkidle", timeout=20000)
-            print("[INFO] ✅ 成功进入页面")
+            await page.wait_for_url("**/dashboard*", timeout=20000)
+            await page.wait_for_load_state("networkidle")
+            print("[INFO] ✅ 成功进入 Dashboard")
         except:
-            print("[WARN] 页面加载超时")
+            print("[WARN] 页面未检测到跳转，检查登录状态...")
 
         await page.screenshot(path="step3.png")
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 获取 API 数据 (修正了之前的 await 错误) ---
+        # --- 获取 API 数据 ---
         print("[INFO] 开始获取服务器信息...")
-        # 这里使用 Playwright 的 request 获取，它会自动带上登录后的 Cookie
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         
         if resp.ok:
-            data = await resp.json()  # <--- 正确补上了 await
+            data = await resp.json()
             servers = data.get("data", [])
             for server in servers:
                 attrs = server['attributes']
