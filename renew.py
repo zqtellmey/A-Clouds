@@ -67,66 +67,71 @@ async def run_renew():
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 获取 API 数据并推送剩余时间 ---
+        # 1. 统一进入项目页
+        await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
+        
+        # 2. 优先处理 Reactivate
+        reactivate_btns = page.locator('button:has-text("Reactivate")')
+        count = await reactivate_btns.count()
+        if count > 0:
+            print(f"[INFO] 发现 {count} 个 Reactivate 按钮，优先执行...")
+            for i in range(count):
+                await reactivate_btns.nth(i).click()
+                # 触发人机验证逻辑
+                await asyncio.sleep(2)
+                checkbox = page.locator('div[role="checkbox"]:has-text("I am not a robot")')
+                if await checkbox.count() > 0: await checkbox.click()
+                await asyncio.sleep(2)
+                # (此处假设已点击文字验证)
+                await page.screenshot(path=f"reactivate_{i}.png")
+                send_tg_photo(f"已执行 Reactivate 动作 {i+1}", f"reactivate_{i}.png")
+                await asyncio.sleep(2)
+
+        # 3. 再获取服务器剩余时间，判断是否需要 Renew
         print("[INFO] 开始获取服务器信息...")
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         if resp.ok:
             data = await resp.json()
             servers = data.get("data", [])
-            
-            await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
-            
             now = datetime.now(timezone.utc)
+            
             for server in servers:
                 attrs = server['attributes']
                 s_name = attrs['name']
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 汇报状态
-                status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
-                report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
-                send_tg_msg(report)
+                # 推送当前状态
+                status_text = f"{hours_left:.2f} 小时" if hours_left >= 2 else "⚠️ 小于2小时"
+                send_tg_msg(f"服务器: {s_name}\n剩余时间: {status_text}")
                 
-                # --- 操作阶段：找到、点击、处理交互验证、截图 ---
-                renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
-                if await renew_btn.count() > 0:
-                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备尝试强制点击")
-                    await renew_btn.scroll_into_view_if_needed()
-                    await renew_btn.evaluate("el => el.click()")
-                    
-                    # 给弹窗弹出时间
-                    await asyncio.sleep(2)
-                    
-                    # 1. 点击“我不不是机器人”
-                    checkbox = page.locator('div[role="checkbox"]:has-text("I am not a robot")')
-                    if await checkbox.count() > 0:
-                        await checkbox.click()
+                # 若小于2小时，则去找 Renew 按钮
+                if hours_left < 2:
+                    renew_btn = page.locator(f'tr:has-text("{s_name}") button.client-btn--secondary:has-text("Renew")')
+                    if await renew_btn.count() > 0:
+                        await renew_btn.scroll_into_view_if_needed()
+                        await renew_btn.evaluate("el => el.click()")
+                        await asyncio.sleep(2)
+                        # 处理人机验证
+                        checkbox = page.locator('div[role="checkbox"]:has-text("I am not a robot")')
+                        if await checkbox.count() > 0: await checkbox.click()
                         await asyncio.sleep(1)
-                    
-                    # 2. 点击目标文字 (Serveur)
-                    target_btn = page.locator('div[role="dialog"] button:has-text("Serveur")')
-                    if await target_btn.count() > 0:
-                        await target_btn.click()
-                        print(f"[INFO] 已点击目标文字：Serveur")
-                    
-                    await asyncio.sleep(2)
-                    await page.screenshot(path="renew_final_result.png")
-                    send_tg_photo(f"已完成 {s_name} 的交互式验证操作", "renew_final_result.png")
-                    
-                    # --- 续期后再次查询 API ---
-                    await asyncio.sleep(5) # 等待后端处理
-                    new_resp = await context.request.get("https://dash.aclclouds.com/api/client")
-                    if new_resp.ok:
-                        new_data = await new_resp.json()
-                        new_servers = new_data.get("data", [])
-                        for n_server in new_servers:
-                            if n_server['attributes']['name'] == s_name:
-                                n_expires = datetime.fromisoformat(n_server['attributes']['expires_at'])
-                                n_hours = (n_expires - now).total_seconds() / 3600
-                                send_tg_msg(f"服务器: {s_name}\n状态: ✅ 续期后剩余时间: {n_hours:.2f} 小时")
-                else:
-                    print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
+                        target_btn = page.locator('div[role="dialog"] button:has-text("Serveur")')
+                        if await target_btn.count() > 0: await target_btn.click()
+                        
+                        await asyncio.sleep(2)
+                        await page.screenshot(path="renew_final_result.png")
+                        send_tg_photo(f"已尝试完成 {s_name} 的 Renew 交互式验证", "renew_final_result.png")
+                        
+                        # 续期后再次查询 API
+                        await asyncio.sleep(5)
+                        new_resp = await context.request.get("https://dash.aclclouds.com/api/client")
+                        if new_resp.ok:
+                            new_data = await new_resp.json()
+                            for n_s in new_data.get("data", []):
+                                if n_s['attributes']['name'] == s_name:
+                                    n_h = (datetime.fromisoformat(n_s['attributes']['expires_at']) - now).total_seconds() / 3600
+                                    send_tg_msg(f"服务器: {s_name}\n状态: ✅ 续期后剩余时间: {n_h:.2f} 小时")
         
         await browser.close()
 
