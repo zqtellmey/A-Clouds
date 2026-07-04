@@ -74,7 +74,6 @@ async def run_renew():
             data = await resp.json()
             servers = data.get("data", [])
             
-            # 统一跳转到项目页进行探测
             await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
             
             now = datetime.now(timezone.utc)
@@ -89,15 +88,20 @@ async def run_renew():
                 report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
                 send_tg_msg(report)
                 
-                # --- 操作阶段 ---
+                # --- 操作阶段：找到并点击，走登录时的验证逻辑 ---
                 renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                 if await renew_btn.count() > 0:
-                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备尝试强制点击")
+                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备点击")
                     await renew_btn.scroll_into_view_if_needed()
                     await renew_btn.evaluate("el => el.click()")
-                    await asyncio.sleep(2) 
-                    await page.screenshot(path="click_renew.png")
-                    send_tg_photo(f"已强制点击 {s_name} 的 Renew 按钮", "click_renew.png")
+                    
+                    # 使用登录时焊死的逻辑处理验证码
+                    print("[INFO] 开始处理 Renew 人机验证...")
+                    await page.locator('div.auth-captcha-inner[role="checkbox"]').click()
+                    await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=15000)
+                    
+                    await page.screenshot(path="renew_success.png")
+                    send_tg_photo(f"已完成 {s_name} 的 Renew 操作", "renew_success.png")
                 else:
                     print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
         
