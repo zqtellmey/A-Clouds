@@ -83,30 +83,27 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 推送信息
+                # 汇报状态
                 status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
                 report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
                 send_tg_msg(report)
                 
-                # --- 操作阶段：精确处理弹窗验证 ---
+                # --- 操作阶段：找到并强制点击，截图必须执行 ---
                 renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                 if await renew_btn.count() > 0:
-                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备点击")
+                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备尝试强制点击")
                     await renew_btn.scroll_into_view_if_needed()
                     await renew_btn.evaluate("el => el.click()")
                     
-                    # 使用更精确的选择器，专门针对置顶 Dialog 里的 checkbox
-                    captcha_locator = page.locator('div[role="dialog"] .auth-captcha-inner[role="checkbox"]')
-                    await captcha_locator.wait_for(state="visible", timeout=10000)
-                    await captcha_locator.click()
+                    # 尝试点击验证码，使用 try-except 防止超时导致截图逻辑丢失
+                    try:
+                        await page.locator('div.auth-captcha-inner[role="checkbox"]').click()
+                    except:
+                        pass
                     
-                    # 等待该 checkbox 状态变更为 checked
-                    await captcha_locator.wait_for(state="attached")
-                    # 直接监听属性变化，确保点击成功
-                    await page.wait_for_selector('div[role="dialog"] .auth-captcha-inner[aria-checked="true"]', timeout=15000)
-                    
-                    await page.screenshot(path="renew_success.png")
-                    send_tg_photo(f"已完成 {s_name} 的 Renew 操作", "renew_success.png")
+                    await asyncio.sleep(2)
+                    await page.screenshot(path="renew_result.png")
+                    send_tg_photo(f"已点击 {s_name} 的 Renew 按钮并尝试验证", "renew_result.png")
                 else:
                     print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
         
