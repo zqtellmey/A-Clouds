@@ -2,6 +2,7 @@
 import asyncio
 import os
 import requests
+from datetime import datetime, timezone
 from playwright.async_api import async_playwright
 
 # 环境变量读取
@@ -16,9 +17,18 @@ def send_tg_photo(caption, photo_path):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
     try:
         with open(photo_path, 'rb') as f:
-            requests.post(url, data={'chat_id': TG_CHAT_ID, 'caption': caption}, files={'photo': f})
+            # 添加 ACLClouds 标识
+            final_caption = f"ACLClouds: {caption}"
+            requests.post(url, data={'chat_id': TG_CHAT_ID, 'caption': final_caption}, files={'photo': f})
     except Exception as e:
         print(f"[ERROR] TG 推送失败: {e}")
+
+def send_tg_msg(text):
+    if TG_BOT_TOKEN and TG_CHAT_ID:
+        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
+        # 添加 ACLClouds 标识
+        final_text = f"<b>ACLClouds</b>\n{text}"
+        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
 async def run_renew():
     async with async_playwright() as p:
@@ -30,7 +40,7 @@ async def run_renew():
         )
         page = await context.new_page()
 
-        # --- 焊死登录部分 (一个字都没改) ---
+        # --- 焊死登录部分 (一个字没动) ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -60,16 +70,29 @@ async def run_renew():
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 获取 API 数据 ---
+        # --- 获取并判断到期时间，并推送到 TG ---
         print("[INFO] 开始获取服务器信息...")
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         
         if resp.ok:
             data = await resp.json()
             servers = data.get("data", [])
+            
+            now = datetime.now(timezone.utc)
             for server in servers:
                 attrs = server['attributes']
-                print(f"[LOG] 服务器: {attrs['name']} | 到期时间: {attrs['expires_at']}")
+                expires_at = datetime.fromisoformat(attrs['expires_at'])
+                
+                # 计算剩余小时
+                diff = expires_at - now
+                hours_left = diff.total_seconds() / 3600
+                
+                # 构建推送消息
+                status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
+                report = f"服务器: {attrs['name']}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
+                
+                print(f"[LOG] {report}")
+                send_tg_msg(report)
         else:
             print(f"[ERROR] API 返回状态码: {resp.status}")
 
