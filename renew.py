@@ -28,16 +28,6 @@ def send_tg_msg(text):
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
-async def handle_captcha(page):
-    captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
-    if await captcha.count() > 0:
-        await captcha.click()
-        # 宽容等待，不强制要求必须看到 aria-checked 以防止 Renew 时超时
-        try:
-            await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=5000)
-        except:
-            print("[INFO] 验证码状态未改变，继续执行...")
-
 async def run_renew():
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
@@ -48,7 +38,7 @@ async def run_renew():
         )
         page = await context.new_page()
 
-        # --- 焊死登录部分 (完全恢复你确认过的逻辑) ---
+        # --- 焊死登录部分 (一个字没动) ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -77,12 +67,14 @@ async def run_renew():
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 焊死获取数据并推送的功能 ---
+        # --- 获取 API 数据并推送剩余时间 ---
         print("[INFO] 开始获取服务器信息...")
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         if resp.ok:
             data = await resp.json()
             servers = data.get("data", [])
+            
+            # 统一跳转到项目页进行探测
             await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
             
             now = datetime.now(timezone.utc)
@@ -92,27 +84,18 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 汇报逻辑（焊死）
+                # 推送信息
                 status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
                 report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
                 send_tg_msg(report)
                 
-                # 动作逻辑（追加）
-                # 1. 优先 Reactivate
-                reactivate_btn = page.locator('button:has-text("Reactivate")')
-                if await reactivate_btn.count() > 0:
-                    await reactivate_btn.click()
-                    await handle_captcha(page)
-                    send_tg_msg(f"服务器: {s_name}\n状态: ✅ 已执行 Reactivate")
-                    continue
-                
-                # 2. Renew
-                if hours_left < 2:
-                    renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
-                    if await renew_btn.count() > 0:
-                        await renew_btn.click()
-                        await handle_captcha(page)
-                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ 已执行 Renew")
+                # --- 探测阶段：只查找，不点击 ---
+                # 使用你提供的精确 CSS 类名查找
+                renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
+                if await renew_btn.count() > 0:
+                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮")
+                else:
+                    print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
         
         await browser.close()
 
