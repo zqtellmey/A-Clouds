@@ -105,7 +105,6 @@ async def run_renew():
                         await asyncio.sleep(1)
                     
                     # 2. 点击目标文字 (Serveur)
-                    # 这里的定位器使用了 Role Dialog 限制范围，确保点击的是弹窗内的按钮
                     target_btn = page.locator('div[role="dialog"] button:has-text("Serveur")')
                     if await target_btn.count() > 0:
                         await target_btn.click()
@@ -114,6 +113,18 @@ async def run_renew():
                     await asyncio.sleep(2)
                     await page.screenshot(path="renew_final_result.png")
                     send_tg_photo(f"已完成 {s_name} 的交互式验证操作", "renew_final_result.png")
+                    
+                    # --- 续期后再次查询 API ---
+                    await asyncio.sleep(5) # 等待后端处理
+                    new_resp = await context.request.get("https://dash.aclclouds.com/api/client")
+                    if new_resp.ok:
+                        new_data = await new_resp.json()
+                        new_servers = new_data.get("data", [])
+                        for n_server in new_servers:
+                            if n_server['attributes']['name'] == s_name:
+                                n_expires = datetime.fromisoformat(n_server['attributes']['expires_at'])
+                                n_hours = (n_expires - now).total_seconds() / 3600
+                                send_tg_msg(f"服务器: {s_name}\n状态: ✅ 续期后剩余时间: {n_hours:.2f} 小时")
                 else:
                     print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
         
