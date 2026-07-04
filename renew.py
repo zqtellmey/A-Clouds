@@ -17,7 +17,6 @@ def send_tg_photo(caption, photo_path):
     url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendPhoto"
     try:
         with open(photo_path, 'rb') as f:
-            # 添加 ACLClouds 标识
             final_caption = f"ACLClouds: {caption}"
             requests.post(url, data={'chat_id': TG_CHAT_ID, 'caption': final_caption}, files={'photo': f})
     except Exception as e:
@@ -26,9 +25,14 @@ def send_tg_photo(caption, photo_path):
 def send_tg_msg(text):
     if TG_BOT_TOKEN and TG_CHAT_ID:
         url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-        # 添加 ACLClouds 标识
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
+
+async def handle_captcha(page):
+    captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
+    await captcha.wait_for(state="visible", timeout=10000)
+    await captcha.click()
+    await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=15000)
 
 async def run_renew():
     async with async_playwright() as p:
@@ -70,7 +74,7 @@ async def run_renew():
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 获取并判断到期时间，并推送到 TG ---
+        # --- 服务器状态检测与操作 ---
         print("[INFO] 开始获取服务器信息...")
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         
@@ -78,21 +82,37 @@ async def run_renew():
             data = await resp.json()
             servers = data.get("data", [])
             
+            # 统一进入项目页面
+            await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
+            
             now = datetime.now(timezone.utc)
             for server in servers:
                 attrs = server['attributes']
+                s_name = attrs['name']
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
+                hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 计算剩余小时
-                diff = expires_at - now
-                hours_left = diff.total_seconds() / 3600
+                # 1. 优先检测 Reactivate 按钮
+                reactivate_btn = page.locator('button:has-text("Reactivate")')
+                if await reactivate_btn.count() > 0:
+                    print(f"[INFO] 发现 {s_name} 需要 Reactivate")
+                    await reactivate_btn.click()
+                    await handle_captcha(page)
+                    send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Reactivate</b>")
+                    continue
                 
-                # 构建推送消息
+                # 2. 没有 Reactivate，则判断是否需要 Renew
                 status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
-                report = f"服务器: {attrs['name']}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
-                
-                print(f"[LOG] {report}")
+                report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
+                print(f"[LOG] {report.replace('<b>', '').replace('</b>', '')}")
                 send_tg_msg(report)
+                
+                if hours_left < 2:
+                    renew_btn = page.locator('button:has-text("Renew")')
+                    if await renew_btn.count() > 0:
+                        await renew_btn.click()
+                        await handle_captcha(page)
+                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Renew</b>")
         else:
             print(f"[ERROR] API 返回状态码: {resp.status}")
 
