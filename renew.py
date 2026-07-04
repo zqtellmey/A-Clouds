@@ -88,22 +88,32 @@ async def run_renew():
                 report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
                 send_tg_msg(report)
                 
-                # --- 操作阶段：找到并强制点击，截图必须执行 ---
+                # --- 操作阶段：找到、点击、处理交互验证、截图 ---
                 renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                 if await renew_btn.count() > 0:
                     print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备尝试强制点击")
                     await renew_btn.scroll_into_view_if_needed()
                     await renew_btn.evaluate("el => el.click()")
                     
-                    # 尝试点击验证码，使用 try-except 防止超时导致截图逻辑丢失
-                    try:
-                        await page.locator('div.auth-captcha-inner[role="checkbox"]').click()
-                    except:
-                        pass
+                    # 给弹窗弹出时间
+                    await asyncio.sleep(2)
+                    
+                    # 1. 点击“我不不是机器人”
+                    checkbox = page.locator('div[role="checkbox"]:has-text("I am not a robot")')
+                    if await checkbox.count() > 0:
+                        await checkbox.click()
+                        await asyncio.sleep(1)
+                    
+                    # 2. 点击目标文字 (Serveur)
+                    # 这里的定位器使用了 Role Dialog 限制范围，确保点击的是弹窗内的按钮
+                    target_btn = page.locator('div[role="dialog"] button:has-text("Serveur")')
+                    if await target_btn.count() > 0:
+                        await target_btn.click()
+                        print(f"[INFO] 已点击目标文字：Serveur")
                     
                     await asyncio.sleep(2)
-                    await page.screenshot(path="renew_result.png")
-                    send_tg_photo(f"已点击 {s_name} 的 Renew 按钮并尝试验证", "renew_result.png")
+                    await page.screenshot(path="renew_final_result.png")
+                    send_tg_photo(f"已完成 {s_name} 的交互式验证操作", "renew_final_result.png")
                 else:
                     print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
         
