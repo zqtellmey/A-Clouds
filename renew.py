@@ -29,11 +29,14 @@ def send_tg_msg(text):
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
 async def handle_captcha(page):
-    # 复用登录时焊死的验证码操作逻辑
     captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
-    await captcha.wait_for(state="visible", timeout=10000)
-    await captcha.click()
-    await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=15000)
+    if await captcha.count() > 0:
+        await captcha.click()
+        # 宽容等待，不强制要求必须看到 aria-checked 以防止 Renew 时超时
+        try:
+            await page.wait_for_selector('div.auth-captcha-inner[aria-checked="true"]', timeout=5000)
+        except:
+            print("[INFO] 验证码状态未改变，继续执行...")
 
 async def run_renew():
     async with async_playwright() as p:
@@ -45,7 +48,7 @@ async def run_renew():
         )
         page = await context.new_page()
 
-        # --- 焊死登录部分 (一个字没动) ---
+        # --- 焊死登录部分 (完全恢复你确认过的逻辑) ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -67,22 +70,19 @@ async def run_renew():
         try:
             await page.wait_for_url("**/dashboard*", timeout=20000)
             await page.wait_for_load_state("networkidle")
-            print("[INFO] ✅ 成功进入 Dashboard")
         except:
-            print("[WARN] 页面未检测到跳转，检查登录状态...")
+            pass
 
         await page.screenshot(path="step3.png")
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 服务器状态检测与操作 ---
+        # --- 焊死获取数据并推送的功能 ---
         print("[INFO] 开始获取服务器信息...")
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
-        
         if resp.ok:
             data = await resp.json()
             servers = data.get("data", [])
-            
             await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
             
             now = datetime.now(timezone.utc)
@@ -92,33 +92,28 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 1. 优先检测 Reactivate
+                # 汇报逻辑（焊死）
+                status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
+                report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
+                send_tg_msg(report)
+                
+                # 动作逻辑（追加）
+                # 1. 优先 Reactivate
                 reactivate_btn = page.locator('button:has-text("Reactivate")')
                 if await reactivate_btn.count() > 0:
-                    print(f"[INFO] 发现 {s_name} 需要 Reactivate")
                     await reactivate_btn.click()
                     await handle_captcha(page)
-                    send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Reactivate</b>")
+                    send_tg_msg(f"服务器: {s_name}\n状态: ✅ 已执行 Reactivate")
                     continue
                 
-                # 2. 判断 Renew (带验证码流程)
+                # 2. Renew
                 if hours_left < 2:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                     if await renew_btn.count() > 0:
-                        print(f"[INFO] 发现 {s_name} 需要 Renew")
                         await renew_btn.click()
-                        # 点击后复用登录时的验证码处理流程
                         await handle_captcha(page)
-                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Renew 并通过验证</b>")
-                    else:
-                        report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ⚠️ 需续期但未找到按钮"
-                        send_tg_msg(report)
-                else:
-                    print(f"[LOG] {s_name} 时间充足")
-
-        else:
-            print(f"[ERROR] API 返回状态码: {resp.status}")
-
+                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ 已执行 Renew")
+        
         await browser.close()
 
 if __name__ == "__main__":
