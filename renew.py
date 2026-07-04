@@ -2,6 +2,7 @@
 import asyncio
 import os
 import requests
+from datetime import datetime, timezone
 from playwright.async_api import async_playwright
 
 # 环境变量读取
@@ -20,10 +21,24 @@ def send_tg_photo(caption, photo_path):
     except Exception as e:
         print(f"[ERROR] TG 推送失败: {e}")
 
-def send_tg_msg(text):
-    if TG_BOT_TOKEN and TG_CHAT_ID:
-        url = f"https://api.telegram.org/bot{TG_BOT_TOKEN}/sendMessage"
-        requests.post(url, json={"chat_id": TG_CHAT_ID, "text": text, "parse_mode": "HTML"})
+def check_time_and_log(expires_str, name):
+    try:
+        # 解析 ISO 格式时间
+        dt = datetime.fromisoformat(expires_str.replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
+        remaining_hours = (dt - now).total_seconds() / 3600
+        
+        print(f"[LOG] 服务器: {name} | 到期时间: {expires_str} | 剩余小时: {remaining_hours:.2f}")
+        
+        if remaining_hours < 2:
+            print(f"[LOG] ✅ {name} 剩余时间小于 2 小时，触发续期条件")
+        else:
+            print(f"[LOG] ℹ️ {name} 剩余时间充足")
+            
+        return remaining_hours
+    except Exception as e:
+        print(f"[ERROR] 时间解析失败: {e}, 原字符串: {expires_str}")
+        return 999
 
 async def run_renew():
     async with async_playwright() as p:
@@ -35,7 +50,7 @@ async def run_renew():
         )
         page = await context.new_page()
 
-        # --- 焊死登录部分 (一个字没动) ---
+        # --- 焊死登录部分 ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -55,34 +70,25 @@ async def run_renew():
         await page.locator("#password").press("Enter")
         
         try:
-            await page.wait_for_url("**/dashboard*", timeout=20000)
-            await page.wait_for_load_state("networkidle")
-            print("[INFO] ✅ 成功进入 Dashboard")
+            await page.wait_for_load_state("networkidle", timeout=20000)
+            print("[INFO] ✅ 登录操作完成")
         except:
-            print("[WARN] 页面未检测到跳转，检查登录状态...")
+            print("[WARN] 页面加载超时，检查登录状态...")
 
         await page.screenshot(path="step3.png")
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # --- 新增：后续续期流程 ---
+        # --- 服务器获取与判断 ---
         print("[INFO] 开始获取服务器信息...")
-        # 1. API 获取列表
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
-        servers = resp.json().get("data", [])
-        
-        # 2. 跳转到续期页面
-        await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
-        
-        for server in servers:
-            attrs = server['attributes']
-            name = attrs['name']
-            expires = attrs['expires_at']
-            
-            # 这里逻辑按需扩展，先执行查看
-            msg = f"服务器: {name}\n到期时间: {expires}"
-            send_tg_msg(msg)
-            print(f"[INFO] 已推送信息: {name}")
+        if resp.ok:
+            data = resp.json().get("data", [])
+            for server in data:
+                attrs = server['attributes']
+                check_time_and_log(attrs['expires_at'], attrs['name'])
+        else:
+            print(f"[ERROR] 获取服务器列表失败: {resp.status}")
 
         await browser.close()
 
