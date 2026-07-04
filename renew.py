@@ -29,6 +29,7 @@ def send_tg_msg(text):
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
 async def handle_captcha(page):
+    # 复用登录时焊死的验证码操作逻辑
     captcha = page.locator('div.auth-captcha-inner[role="checkbox"]')
     await captcha.wait_for(state="visible", timeout=10000)
     await captcha.click()
@@ -82,7 +83,6 @@ async def run_renew():
             data = await resp.json()
             servers = data.get("data", [])
             
-            # 统一进入项目页面
             await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
             
             now = datetime.now(timezone.utc)
@@ -92,7 +92,7 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 1. 优先检测 Reactivate 按钮
+                # 1. 优先检测 Reactivate
                 reactivate_btn = page.locator('button:has-text("Reactivate")')
                 if await reactivate_btn.count() > 0:
                     print(f"[INFO] 发现 {s_name} 需要 Reactivate")
@@ -101,18 +101,21 @@ async def run_renew():
                     send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Reactivate</b>")
                     continue
                 
-                # 2. 没有 Reactivate，则判断是否需要 Renew
-                status_text = "⚠️ 需立即续期" if hours_left < 2 else "ℹ️ 时间充足"
-                report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
-                print(f"[LOG] {report.replace('<b>', '').replace('</b>', '')}")
-                send_tg_msg(report)
-                
+                # 2. 判断 Renew (带验证码流程)
                 if hours_left < 2:
-                    renew_btn = page.locator('button:has-text("Renew")')
+                    renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                     if await renew_btn.count() > 0:
+                        print(f"[INFO] 发现 {s_name} 需要 Renew")
                         await renew_btn.click()
+                        # 点击后复用登录时的验证码处理流程
                         await handle_captcha(page)
-                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Renew</b>")
+                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ <b>已执行 Renew 并通过验证</b>")
+                    else:
+                        report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ⚠️ 需续期但未找到按钮"
+                        send_tg_msg(report)
+                else:
+                    print(f"[LOG] {s_name} 时间充足")
+
         else:
             print(f"[ERROR] API 返回状态码: {resp.status}")
 
