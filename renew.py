@@ -89,11 +89,15 @@ async def run_renew():
                 report = f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: {status_text}"
                 send_tg_msg(report)
                 
-                # --- 探测阶段：只查找，不点击 ---
-                # 使用你提供的精确 CSS 类名查找
+                # --- 操作阶段：找到并点击，然后截图 ---
                 renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")')
                 if await renew_btn.count() > 0:
-                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮")
+                    print(f"[LOG] 找到服务器 {s_name} 的 Renew 按钮，准备点击")
+                    await renew_btn.click()
+                    
+                    # 截图查看点击后的状态（是否有验证码弹出等）
+                    await page.screenshot(path="click_renew.png")
+                    send_tg_photo(f"已点击 {s_name} 的 Renew 按钮", "click_renew.png")
                 else:
                     print(f"[LOG] 未能找到服务器 {s_name} 的 Renew 按钮")
         
