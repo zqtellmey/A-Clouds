@@ -67,7 +67,7 @@ async def run_renew():
         send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # 1. 统一进入项目页
+        # 1. 进入项目页
         await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
         
         # 2. 优先处理 Reactivate
@@ -85,7 +85,7 @@ async def run_renew():
                 send_tg_photo(f"已执行 Reactivate 动作 {i+1}", f"reactivate_{i}.png")
                 await asyncio.sleep(2)
 
-        # 3. 再获取服务器剩余时间，判断是否需要 Renew
+        # 3. 获取 API 查询剩余时间
         print("[INFO] 开始获取服务器信息...")
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         if resp.ok:
@@ -99,9 +99,10 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 若小于2小时，则去找 Renew 按钮
+                # 若小于2小时，则寻找并 Renew
                 if hours_left < 2:
-                    renew_btn = page.locator(f'tr:has-text("{s_name}") button.client-btn--secondary:has-text("Renew")')
+                    # 恢复最初成功的查找逻辑：不加 tr 限制，直接按类名和文本查找
+                    renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
                         await renew_btn.evaluate("el => el.click()")
@@ -129,7 +130,6 @@ async def run_renew():
                     else:
                         print(f"[LOG] 需续期但未找到 Renew 按钮")
                 else:
-                    # 不满足续期条件
                     send_tg_msg(f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ℹ️ 无需续期操作")
         
         await browser.close()
