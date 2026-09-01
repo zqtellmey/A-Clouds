@@ -100,7 +100,7 @@ async def run_renew():
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
                 # 若小于2小时，则寻找并 Renew
-                if hours_left < 2:
+                if hours_left < 21:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
