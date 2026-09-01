@@ -68,7 +68,8 @@ async def run_renew():
         # --- 登录部分结束 ---
 
         # 1. 进入项目页
-        await page.goto("https://dash.aclclouds.com/projects", wait_until="networkidle")
+        await page.goto("https://aclclouds.com/dashboard/projects", wait_until="networkidle")
+                         
         
         # 2. 优先处理 Reactivate
         reactivate_btns = page.locator('button:has-text("Reactivate")')
