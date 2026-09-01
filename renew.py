@@ -102,7 +102,7 @@ async def run_renew():
                 # 若小于2小时，则寻找并 Renew
                 if hours_left < 21:
                   #  renew_btn = page.locator('client-btn client-btn--secondary client-btn--sm:has-text("Renew")').first
-                    renew_btn = page.get_by_role("button", name="Renew").first
+                    renew_btn = page.get_by_text("Renew").first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
                         await renew_btn.evaluate("el => el.click()")
