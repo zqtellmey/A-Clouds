@@ -30,20 +30,16 @@ def send_tg_msg(text):
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
-async def ask_gemini_for_captcha(image_bytes_list, target_word):
+async def ask_gemini_for_captcha(image_bytes_list, target_word, max_retries=3):
     """
-    一次性将 4 张图片传给 Gemini API，让其选出符合 target_word 的选项编号 (1-4)
+    一次性将 4 张图片传给 Gemini API，内置自动重试机制以应对偶尔的超时
     """
     if not GEMINI_API_KEY:
         print("[ERROR] 未配置 GEMINI_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
-    # 修正：使用 gemini-3.6-flash 模型
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     
-    print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Gemini (目标: {target_word})...")
-    
-    # 构造多模态 parts：包含提示词和 4 张图片
     parts = [
         {"text": f"These 4 images are options 1, 2, 3, and 4. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number of the correct image (1, 2, 3, or 4)."}
     ]
@@ -66,25 +62,31 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         ]
     }
     
-    try:
-        response = requests.post(url, json=payload, timeout=30)
-        if response.status_code == 200:
-            res_json = response.json()
-            text = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-            print(f"[INFO] Gemini 返回结果: {text}")
-            
-            # 从返回文本中提取数字 1-4
-            for char in text:
-                if char in ['1', '2', '3', '4']:
-                    choice_idx = int(char) - 1
-                    print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
-                    return choice_idx
-                    
-            print(f"[ERROR] 未能从 Gemini 返回结果中提取到有效编号: {text}")
-        else:
-            print(f"[ERROR] Gemini API 请求失败: {response.text}")
-    except Exception as e:
-        print(f"[ERROR] 调用 Gemini API 异常: {e}")
+    # 增加自动重试循环
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Gemini (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
+            response = requests.post(url, json=payload, timeout=30)
+            if response.status_code == 200:
+                res_json = response.json()
+                text = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+                print(f"[INFO] Gemini 返回结果: {text}")
+                
+                for char in text:
+                    if char in ['1', '2', '3', '4']:
+                        choice_idx = int(char) - 1
+                        print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
+                        return choice_idx
+                        
+                print(f"[ERROR] 未能从 Gemini 返回结果中提取到有效编号: {text}")
+            else:
+                print(f"[ERROR] Gemini API 请求失败: {response.text}")
+        except Exception as e:
+            print(f"[ERROR] 调用 Gemini API 异常 (尝试 {attempt}/{max_retries}): {e}")
+        
+        if attempt < max_retries:
+            print("[INFO] 等待 2 秒后进行重试...")
+            await asyncio.sleep(2)
         
     return None
 
@@ -129,11 +131,9 @@ async def run_renew():
                     image_bytes_list = []
                     for i in range(4):
                         img_element = option_buttons.nth(i).locator('img.auth-captcha-option-img')
-                        # 压缩质量设为 40，减小图片体积，防止单次请求过大导致超时
                         img_bytes = await img_element.screenshot(type="jpeg", quality=40)
                         image_bytes_list.append(img_bytes)
                     
-                    # 一次性发送 4 张图片让 Gemini 识别
                     correct_index = await ask_gemini_for_captcha(image_bytes_list, target_word)
                     if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
@@ -202,8 +202,8 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 若小于20小时，则寻找并 Renew
-                if hours_left < 20:
+                # 若小于2小时，则寻找并 Renew
+                if hours_left < 2:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
