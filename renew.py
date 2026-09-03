@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/init/env python3
 import asyncio
 import os
 import base64
@@ -42,21 +42,27 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
-    # 批次定义：
-    # 第一组：只传第 1 张图 ([0])，如果对，全局索引就是 0 (base_offset=0)
-    # 第二组：传第 2, 3, 4 张图 ([1, 2, 3])，模型回答 1, 2, 3 加上偏移量 1 后对应全局索引 1, 2, 3
+    # 分两次请求：
+    # 第一次：只测第 1 张图 ([0])。如果是对的，模型会给出确认。
+    # 第二次：测第 2、3、4 张图 ([1, 2, 3])，模型返回 1、2、3 对应全局的第 2、3、4 个按钮。
     batches = [
-        ([0], 0),          # 第一组：全局图 0 -> 模型眼中的 Option 1 (偏移量 0)
-        ([1, 2, 3], 1)     # 第二组：全局图 1, 2, 3 -> 模型眼中的 Option 1, 2, 3 (偏移量 1)
+        ([0], 0),          
+        ([1, 2, 3], 1)     
     ]
 
     for idx_group, (img_indices, base_offset) in enumerate(batches):
         if idx_group > 0:
-            await asyncio.sleep(6)
+            await asyncio.sleep(4)
 
         max_option_num = len(img_indices)
+        # 根据你的提示词，要求模型判断该图是否匹配 Target
+        if idx_group == 0:
+            prompt_text = f"Target: '{target_word}'. Does this image match the target? Answer '1' if it matches, or '0' if it does NOT match. Answer ONLY 1 or 0 at the very end."
+        else:
+            prompt_text = f"Target: '{target_word}'. Look at these 3 options. Which option number (1, 2, or 3) is correct? Answer ONLY the single digit 1, 2, or 3 at the very end."
+
         content_parts = [
-            {"type": "text", "text": f"Target: '{target_word}'. Which option (1 to {max_option_num}) is correct? Answer ONLY the single digit at the very end."}
+            {"type": "text", "text": prompt_text}
         ]
         
         for local_idx, global_idx in enumerate(img_indices):
@@ -87,29 +93,32 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     res_json = response.json()
                     raw_text = res_json['choices'][0]['message']['content'].strip()
                     
-                    # 完整打印原始内容到控制台
                     print(f"--- Groq 原始内容开始 (第 {idx_group + 1} 组) ---\n{raw_text}\n--- Groq 原始内容结束 ---")
-                    
-                    # 同时通过 TG 把完整返回内容和识别过程发出来
                     send_tg_msg(f"<b>Groq 识别调试 (第 {idx_group + 1} 组)</b>\n目标: <code>{target_word}</code>\n<pre>{raw_text}</pre>")
                     
                     clean_text = raw_text
                     if "</think>" in clean_text:
                         clean_text = clean_text.split("</think>")[-1].strip()
                     
-                    matches = re.findall(rf'\b([1-{max_option_num}])\b', clean_text)
-                    if matches:
-                        char = matches[-1]
-                        choice_idx = base_offset + (int(char) - 1)
-                        
-                        if idx_group == 0 and int(char) == 1:
-                            print(f"[INFO] 第一组即命中正确选项: 全局第 {choice_idx + 1} 个")
-                            return choice_idx
-                        elif idx_group > 0:
+                    if idx_group == 0:
+                        # 第一组：检查模型是否回答了 1（代表第一张图正确）
+                        matches = re.findall(r'\b([01])\b', clean_text)
+                        if matches:
+                            val = matches[-1]
+                            if val == '1':
+                                print("[INFO] 第一张图匹配成功，确认是第 1 个按钮！")
+                                return 0
+                            else:
+                                print("[INFO] 第一张图不匹配，跳过，继续检测后面几张图...")
+                                break # 跳出当前重试，进入第二组
+                    else:
+                        # 第二组：检查模型回答的 1, 2, 3
+                        matches = re.findall(rf'\b([1-{max_option_num}])\b', clean_text)
+                        if matches:
+                            char = matches[-1]
+                            choice_idx = base_offset + (int(char) - 1)
                             print(f"[INFO] 第二组找到正确选项: 全局第 {choice_idx + 1} 个")
                             return choice_idx
-                    else:
-                        print(f"[WARNING] 未能从返回文本中正则匹配到 1~{max_option_num} 的数字")
                     
                     break
                 elif response.status_code == 429:
@@ -151,7 +160,6 @@ async def run_renew():
         print("[INFO] 等待验证结果或图形弹窗出现...")
         await asyncio.sleep(3)
         
-        # 新增：点开人机验证勾选框后立刻截图并发送到 Telegram
         await page.screenshot(path="captcha_popup.png")
         send_tg_photo("已点击勾选框后的弹窗状态", "captcha_popup.png")
         
