@@ -30,13 +30,12 @@ def send_tg_msg(text):
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
-async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
+async def ask_groq_for_single_captcha(img_bytes, target_word, option_num, max_retries=3):
     """
-    将 4 张图片在单次请求中全部发给 Groq，无需 PIL 库，彻底省时且避开 TPM 429 限制
+    每次只发 1 张图给 Groq，将单次 Token 消耗严格控制在 2000 以内，完美避开 8K TPM 限制
     """
     if not GROQ_API_KEY:
-        print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
-        return None
+        return False
     
     url = "https://api.groq.com/openai/v1/chat/completions"
     headers = {
@@ -44,59 +43,53 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
+    b64_data = base64.b64encode(img_bytes).decode('utf-8')
     content_parts = [
-        {"type": "text", "text": f"Here are 4 captcha option images labeled Option 1, Option 2, Option 3, and Option 4. Which option matches '{target_word}'? Output ONLY the single digit number (1, 2, 3, or 4). Do not output any explanation."}
-    ]
-    
-    for i, img_bytes in enumerate(image_bytes_list):
-        b64_data = base64.b64encode(img_bytes).decode('utf-8')
-        content_parts.append({"type": "text", "text": f"Option {i + 1}:"})
-        content_parts.append({
+        {"type": "text", "text": f"Does this image match '{target_word}'? Answer ONLY 'YES' or 'NO'."},
+        {
             "type": "image_url",
             "image_url": {
                 "url": f"data:image/jpeg;base64,{b64_data}"
             }
-        })
-        
+        }
+    ]
+    
     payload = {
         "model": "qwen/qwen3.6-27b",
         "messages": [{"role": "user", "content": content_parts}],
-        "max_tokens": 30,
+        "max_tokens": 15,
         "temperature": 0
     }
 
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"[INFO] 正在将 4 张图片一次性发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
+            print(f"[INFO] 正在检测选项 {option_num} 是否为 '{target_word}' [尝试 {attempt}/{max_retries}]...")
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             if response.status_code == 200:
                 res_json = response.json()
                 text = res_json['choices'][0]['message']['content'].strip()
-                print(f"[INFO] Groq 完整返回: {text}")
+                print(f"[INFO] 选项 {option_num} Groq 返回: {text}")
                 
-                # 剥离 <think>...</think> 标签
+                # 剥离思维链标签
                 if "</think>" in text:
                     text = text.split("</think>")[-1].strip()
                 
-                # 提取数字
-                for char in text:
-                    if char in ['1', '2', '3', '4']:
-                        choice_idx = int(char) - 1
-                        print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 个选项)")
-                        return choice_idx
-                print(f"[WARNING] 返回文本中未找到有效数字，重试...")
+                # 只要回答包含 YES 就说明对了
+                if "YES" in text.upper():
+                    return True
+                elif "NO" in text.upper():
+                    return False
+                break
             elif response.status_code == 429:
-                print(f"[WARNING] 触发频率限制 (429)，等待 15 秒后重试...")
-                await asyncio.sleep(15)
+                print(f"[WARNING] 触发频率限制 (429)，等待 10 秒后重试...")
+                await asyncio.sleep(10)
             else:
                 print(f"[ERROR] Groq API 请求失败: {response.text}")
         except Exception as e:
-            print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
+            print(f"[ERROR] 调用 Groq API 异常: {e}")
         
-        if attempt < max_retries:
-            await asyncio.sleep(3)
-        
-    return None
+        await asyncio.sleep(3)
+    return False
 
 async def run_renew():
     async with async_playwright() as p:
@@ -126,7 +119,7 @@ async def run_renew():
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
-            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq 一次性识别...")
+            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用单张轮询识别...")
             
             try:
                 await page.wait_for_selector('div.auth-captcha-prompt strong', timeout=5000)
@@ -143,13 +136,21 @@ async def run_renew():
                 print(f"[INFO] 检测到验证码选项数量: {count}")
                 
                 if count == 4:
-                    image_bytes_list = []
+                    correct_index = None
                     for i in range(4):
                         img_element = option_buttons.nth(i).locator('img.auth-captcha-option-img')
                         img_bytes = await img_element.screenshot(type="jpeg", quality=40)
-                        image_bytes_list.append(img_bytes)
+                        
+                        # 每次请求之间稍微等待 3 秒，防止 8K TPM 超限
+                        if i > 0:
+                            await asyncio.sleep(3)
+                            
+                        is_match = await ask_groq_for_single_captcha(img_bytes, target_word, i + 1)
+                        if is_match:
+                            correct_index = i
+                            print(f"[INFO] 找到正确答案！是第 {i + 1} 个选项。")
+                            break
                     
-                    correct_index = await ask_groq_for_captcha(image_bytes_list, target_word)
                     if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
                         await option_buttons.nth(correct_index).click()
@@ -159,7 +160,7 @@ async def run_renew():
                         except:
                             print("[ERROR] 点击选项后验证码仍未勾选成功")
                     else:
-                        print("[ERROR] 未能通过 Groq 正确识别出验证选项")
+                        print("[ERROR] 遍历完所有选项均未通过 Groq 确认正确项")
                 else:
                     print(f"[ERROR] 选项数量不为 4，当前数量为: {count}")
 
