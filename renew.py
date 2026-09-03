@@ -73,36 +73,43 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         payload = {
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": content_parts}],
-            "max_tokens": 80,
+            "max_tokens": 150,
             "temperature": 0
         }
 
         for attempt in range(1, max_retries + 1):
             try:
-                print(f"[INFO] 正在向 Groq 发送第 {idx_group + 1} 组图片进行识别...")
+                print(f"[INFO] 正在向 Groq 发送第 {idx_group + 1} 组图片进行识别 (目标: {target_word})...")
                 response = requests.post(url, json=payload, headers=headers, timeout=30)
+                print(f"[INFO] Groq 响应状态码: {response.status_code}")
                 
                 if response.status_code == 200:
                     res_json = response.json()
                     raw_text = res_json['choices'][0]['message']['content'].strip()
                     
+                    # 完整打印原始内容到控制台
+                    print(f"--- Groq 原始内容开始 (第 {idx_group + 1} 组) ---\n{raw_text}\n--- Groq 原始内容结束 ---")
+                    
+                    # 同时通过 TG 把完整返回内容和识别过程发出来
+                    send_tg_msg(f"<b>Groq 识别调试 (第 {idx_group + 1} 组)</b>\n目标: <code>{target_word}</code>\n<pre>{raw_text}</pre>")
+                    
                     clean_text = raw_text
                     if "</think>" in clean_text:
                         clean_text = clean_text.split("</think>")[-1].strip()
                     
-                    # 正则匹配对应的数字范围
                     matches = re.findall(rf'\b([1-{max_option_num}])\b', clean_text)
                     if matches:
                         char = matches[-1]
                         choice_idx = base_offset + (int(char) - 1)
                         
-                        # 如果是第一组，我们更谨慎：只有当模型非常确定是 1 时才采纳
                         if idx_group == 0 and int(char) == 1:
                             print(f"[INFO] 第一组即命中正确选项: 全局第 {choice_idx + 1} 个")
                             return choice_idx
                         elif idx_group > 0:
                             print(f"[INFO] 第二组找到正确选项: 全局第 {choice_idx + 1} 个")
                             return choice_idx
+                    else:
+                        print(f"[WARNING] 未能从返回文本中正则匹配到 1~{max_option_num} 的数字")
                     
                     break
                 elif response.status_code == 429:
@@ -143,6 +150,10 @@ async def run_renew():
         
         print("[INFO] 等待验证结果或图形弹窗出现...")
         await asyncio.sleep(3)
+        
+        # 新增：点开人机验证勾选框后立刻截图并发送到 Telegram
+        await page.screenshot(path="captcha_popup.png")
+        send_tg_photo("已点击勾选框后的弹窗状态", "captcha_popup.png")
         
         is_already_checked = await captcha_container.get_attribute("aria-checked")
         if is_already_checked == "true":
