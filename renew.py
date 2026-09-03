@@ -129,18 +129,15 @@ async def run_renew():
         captcha_container = page.locator('div.auth-captcha-inner[role="checkbox"]')
         await captcha_container.click()
         
-        # 给予充足时间让弹窗出现并判断状态
         print("[INFO] 等待验证结果或图形弹窗出现...")
         await asyncio.sleep(3)
         
-        # 检查是否直接打勾通过了
         is_already_checked = await captcha_container.get_attribute("aria-checked")
         if is_already_checked == "true":
             print("[INFO] 验证码直接打勾通过！")
         else:
             print("[INFO] 未直接打勾，开始检测图形验证弹窗...")
             
-            # 延长等待提示词元素出现
             prompt_locator = page.locator('div.auth-captcha-prompt strong')
             try:
                 await prompt_locator.wait_for(state="visible", timeout=6000)
@@ -166,9 +163,17 @@ async def run_renew():
                     correct_index = await ask_groq_for_captcha(image_bytes_list, target_word)
                     if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
-                        await option_buttons.nth(correct_index).click()
+                        
+                        # 采用 JS 强制触发点击
+                        await option_buttons.nth(correct_index).evaluate("el => el.click()")
+                        await asyncio.sleep(3)
+                        
+                        # 点击完立刻截图并发送到 Telegram 查看现场情况
+                        await page.screenshot(path="captcha_clicked.png")
+                        send_tg_photo(f"已点击第 {correct_index + 1} 个选项后的页面状态", "captcha_clicked.png")
+                        
                         try:
-                            await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=15000)
+                            await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=10000)
                             print("[INFO] 验证码已成功勾选！")
                         except:
                             print("[WARNING] 点击选项后验证码勾选状态等待超时")
