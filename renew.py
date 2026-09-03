@@ -32,7 +32,7 @@ def send_tg_msg(text):
 
 async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     """
-    使用 Groq API（OpenAI 兼容多模态格式）一次性将 4 张图片传给模型，内置自动重试机制
+    使用 Groq 免费多模态视觉模型 (qwen/qwen3.6-27b) 一次性将 4 张图片传给模型识别
     """
     if not GROQ_API_KEY:
         print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
@@ -55,7 +55,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         })
         
     payload = {
-        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "model": "qwen/qwen3.6-27b",  # 使用 Groq 免费且稳定支持视觉多模态的模型
         "messages": [
             {
                 "role": "user",
@@ -70,7 +70,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
     
-    # 增加自动重试循环
+    # 自动重试循环
     for attempt in range(1, max_retries + 1):
         try:
             print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
@@ -108,7 +108,7 @@ async def run_renew():
         )
         page = await context.new_page()
 
-        # --- 登录部分 (已集成智能图形验证处理) ---
+        # --- 登录部分 ---
         print("[INFO] 访问登录页...")
         await page.goto("https://dash.aclclouds.com/auth/login", wait_until="networkidle")
         await page.screenshot(path="step1.png")
@@ -122,14 +122,12 @@ async def run_renew():
         captcha_container = page.locator('div.auth-captcha-inner[role="checkbox"]')
         await captcha_container.click()
         
-        # 检查 aria-checked 属性判断是否直接打勾，或是弹出了图片选择框
         try:
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
             print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq API 一次性识别...")
             
-            # 确保弹窗和目标文字加载完成
             try:
                 await page.wait_for_selector('div.auth-captcha-prompt strong', timeout=5000)
             except:
@@ -165,7 +163,6 @@ async def run_renew():
                 else:
                     print(f"[ERROR] 选项数量不为 4，当前数量为: {count}")
 
-        # 检查最终是否成功打勾，如果未打勾则直接终止后续所有操作
         checkbox_elem = page.locator('div.auth-captcha-inner[role="checkbox"]')
         is_checked = await checkbox_elem.get_attribute("aria-checked")
         if is_checked != "true":
@@ -222,14 +219,12 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 若小于2小时，则寻找并 Renew
                 if hours_left < 2:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
                         await renew_btn.evaluate("el => el.click()")
                         await asyncio.sleep(2)
-                        # 处理人机验证
                         checkbox = page.locator('div[role="checkbox"]:has-text("I am not a robot")')
                         if await checkbox.count() > 0: await checkbox.click()
                         await asyncio.sleep(1)
@@ -240,7 +235,6 @@ async def run_renew():
                         await page.screenshot(path="renew_final_result.png")
                         send_tg_photo(f"已尝试完成 {s_name} 的 Renew 交互式验证", "renew_final_result.png")
                         
-                        # 续期后再次查询 API
                         await asyncio.sleep(5)
                         new_resp = await context.request.get("https://dash.aclclouds.com/api/client")
                         if new_resp.ok:
@@ -256,7 +250,7 @@ async def run_renew():
                 else:
                     send_tg_msg(f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ℹ️ 无需续期操作")
         
-        browser.close()
+        await browser.close()
 
 if __name__ == "__main__":
     asyncio.run(run_renew())
