@@ -42,62 +42,79 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
-    # 一次性将 4 张图全部传入，让模型在同一个上下文中对比
-    content_parts = [
-        {"type": "text", "text": f"Target: '{target_word}'. Look at all 4 options below. Which option number (1, 2, 3, or 4) is correct? Answer ONLY the single digit 1, 2, 3, or 4 at the very end."}
+    # 批次定义：
+    # 第一组：只传第 1 张图 ([0])，如果对，全局索引就是 0 (base_offset=0)
+    # 第二组：传第 2, 3, 4 张图 ([1, 2, 3])，模型回答 1, 2, 3 加上偏移量 1 后对应全局索引 1, 2, 3
+    batches = [
+        ([0], 0),          # 第一组：全局图 0 -> 模型眼中的 Option 1 (偏移量 0)
+        ([1, 2, 3], 1)     # 第二组：全局图 1, 2, 3 -> 模型眼中的 Option 1, 2, 3 (偏移量 1)
     ]
-    
-    for idx, img_bytes in enumerate(image_bytes_list):
-        b64_data = base64.b64encode(img_bytes).decode('utf-8')
-        content_parts.append({"type": "text", "text": f"Option {idx + 1}:"})
-        content_parts.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{b64_data}"
-            }
-        })
-        
-    payload = {
-        "model": "qwen/qwen3.6-27b",
-        "messages": [{"role": "user", "content": content_parts}],
-        "max_tokens": 80,
-        "temperature": 0
-    }
 
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"[INFO] 正在向 Groq 发送 4 张图片进行全局识别...")
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-            print(f"[INFO] Groq 响应状态码: {response.status_code}")
-            
-            if response.status_code == 200:
-                res_json = response.json()
-                raw_text = res_json['choices'][0]['message']['content'].strip()
-                print(f"[INFO] Groq 原始内容返回: {raw_text}")
-                
-                clean_text = raw_text
-                if "</think>" in clean_text:
-                    clean_text = clean_text.split("</think>")[-1].strip()
-                
-                # 正则匹配 1 到 4 的数字，取【最后一个】作为最终结论
-                matches = re.findall(r'\b([1-4])\b', clean_text)
-                if matches:
-                    char = matches[-1]
-                    choice_idx = int(char) - 1
-                    print(f"[INFO] 找到正确选项: 全局第 {choice_idx + 1} 个")
-                    return choice_idx
-                
-                print("[WARNING] 未能从返回内容中解析出有效的选项数字，重试...")
-            elif response.status_code == 429:
-                print("[WARNING] 触发 429 频率限制，等待重试...")
-                await asyncio.sleep(12)
-            else:
-                print(f"[ERROR] Groq API 请求失败返回: {response.text}")
-        except Exception as e:
-            print(f"[ERROR] 调用 Groq API 异常: {e}")
+    for idx_group, (img_indices, base_offset) in enumerate(batches):
+        if idx_group > 0:
+            await asyncio.sleep(6)
+
+        max_option_num = len(img_indices)
+        content_parts = [
+            {"type": "text", "text": f"Target: '{target_word}'. Which option (1 to {max_option_num}) is correct? Answer ONLY the single digit at the very end."}
+        ]
         
-        if attempt < max_retries:
-            await asyncio.sleep(3)
+        for local_idx, global_idx in enumerate(img_indices):
+            img_bytes = image_bytes_list[global_idx]
+            b64_data = base64.b64encode(img_bytes).decode('utf-8')
+            content_parts.append({"type": "text", "text": f"Option {local_idx + 1}:"})
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{b64_data}"
+                }
+            })
+            
+        payload = {
+            "model": "qwen/qwen3.6-27b",
+            "messages": [{"role": "user", "content": content_parts}],
+            "max_tokens": 80,
+            "temperature": 0
+        }
+
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"[INFO] 正在向 Groq 发送第 {idx_group + 1} 组图片进行识别...")
+                response = requests.post(url, json=payload, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    res_json = response.json()
+                    raw_text = res_json['choices'][0]['message']['content'].strip()
+                    
+                    clean_text = raw_text
+                    if "</think>" in clean_text:
+                        clean_text = clean_text.split("</think>")[-1].strip()
+                    
+                    # 正则匹配对应的数字范围
+                    matches = re.findall(rf'\b([1-{max_option_num}])\b', clean_text)
+                    if matches:
+                        char = matches[-1]
+                        choice_idx = base_offset + (int(char) - 1)
+                        
+                        # 如果是第一组，我们更谨慎：只有当模型非常确定是 1 时才采纳
+                        if idx_group == 0 and int(char) == 1:
+                            print(f"[INFO] 第一组即命中正确选项: 全局第 {choice_idx + 1} 个")
+                            return choice_idx
+                        elif idx_group > 0:
+                            print(f"[INFO] 第二组找到正确选项: 全局第 {choice_idx + 1} 个")
+                            return choice_idx
+                    
+                    break
+                elif response.status_code == 429:
+                    print("[WARNING] 触发 429 频率限制，等待重试...")
+                    await asyncio.sleep(12)
+                else:
+                    print(f"[ERROR] Groq API 请求失败返回: {response.text}")
+            except Exception as e:
+                print(f"[ERROR] 调用 Groq API 异常: {e}")
+            
+            if attempt < max_retries:
+                await asyncio.sleep(3)
         
     return None
 
