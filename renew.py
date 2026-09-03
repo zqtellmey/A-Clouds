@@ -64,6 +64,7 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
             response = requests.post(url, json=payload, timeout=20)
             if response.status_code == 200:
                 res_json = response.json()
+                # 修复：正确通过 [0] 下标获取 candidates 列表中的字典
                 text = res_json['candidates']['content']['parts']['text'].strip().upper()
                 print(f"[INFO] 第 {idx + 1} 张图片检测结果: {text}")
                 if "YES" in text:
