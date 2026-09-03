@@ -40,7 +40,7 @@ jobs:
           ACLCLOUDS_PASSWORD: ${{ secrets.ACLCLOUDS_PASSWORD }}
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
         run: |
           python renew.py 2>&1 | tee renew.log
 
