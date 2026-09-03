@@ -32,69 +32,70 @@ def send_tg_msg(text):
 
 async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     """
-    使用 Groq 免费多模态视觉模型 (qwen/qwen3.6-27b) 一次性将 4 张图片传给模型识别
+    因为 Groq 限制单次最多传 3 张图，我们将 4 张图分为两组（1-2张一组，3-4张一组）分别请求
     """
     if not GROQ_API_KEY:
         print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
     url = "https://api.groq.com/openai/v1/chat/completions"
-    
-    content_parts = [
-        {"type": "text", "text": f"These 4 images are options 1, 2, 3, and 4. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number of the correct image (1, 2, 3, or 4)."}
-    ]
-    
-    for idx, img_bytes in enumerate(image_bytes_list):
-        b64_data = base64.b64encode(img_bytes).decode('utf-8')
-        content_parts.append({"type": "text", "text": f"Option {idx + 1}:"})
-        content_parts.append({
-            "type": "image_url",
-            "image_url": {
-                "url": f"data:image/jpeg;base64,{b64_data}"
-            }
-        })
-        
-    payload = {
-        "model": "qwen/qwen3.6-27b",  # 使用 Groq 免费且稳定支持视觉多模态的模型
-        "messages": [
-            {
-                "role": "user",
-                "content": content_parts
-            }
-        ],
-        "max_tokens": 10
-    }
-    
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    
-    # 自动重试循环
-    for attempt in range(1, max_retries + 1):
-        try:
-            print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
-            response = requests.post(url, json=payload, headers=headers, timeout=30)
-            if response.status_code == 200:
-                res_json = response.json()
-                text = res_json['choices'][0]['message']['content'].strip()
-                print(f"[INFO] Groq 返回结果: {text}")
-                
-                for char in text:
-                    if char in ['1', '2', '3', '4']:
-                        choice_idx = int(char) - 1
-                        print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
-                        return choice_idx
-                        
-                print(f"[ERROR] 未能从 Groq 返回结果中提取到有效编号: {text}")
-            else:
-                print(f"[ERROR] Groq API 请求失败: {response.text}")
-        except Exception as e:
-            print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
+
+    # 分为两组：组1 (对应选项 1 和 2), 组2 (对应选项 3 和 4)
+    batches = [
+        (0, 1, [1, 2]),
+        (2, 3, [3, 4])
+    ]
+
+    for start_idx, end_idx, opt_nums in batches:
+        content_parts = [
+            {"type": "text", "text": f"These 2 images are options {opt_nums[0]} and {opt_nums[1]}. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number ({opt_nums[0]} or {opt_nums[1]}), or 0 if neither matches."}
+        ]
         
-        if attempt < max_retries:
-            print("[INFO] 等待 2 秒后进行重试...")
-            await asyncio.sleep(2)
+        for i in range(start_idx, end_idx + 1):
+            img_bytes = image_bytes_list[i]
+            b64_data = base64.b64encode(img_bytes).decode('utf-8')
+            content_parts.append({"type": "text", "text": f"Option {i + 1}:"})
+            content_parts.append({
+                "type": "image_url",
+                "image_url": {
+                    "url": f"data:image/jpeg;base64,{b64_data}"
+                }
+            })
+            
+        payload = {
+            "model": "qwen/qwen3.6-27b",
+            "messages": [{"role": "user", "content": content_parts}],
+            "max_tokens": 10
+        }
+
+        # 针对当前组进行带重试的请求
+        for attempt in range(1, max_retries + 1):
+            try:
+                print(f"[INFO] 正在将选项 {opt_nums} 发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
+                response = requests.post(url, json=payload, headers=headers, timeout=30)
+                if response.status_code == 200:
+                    res_json = response.json()
+                    text = res_json['choices'][0]['message']['content'].strip()
+                    print(f"[INFO] Groq 返回结果 (选项 {opt_nums}): {text}")
+                    
+                    for char in text:
+                        if char in [str(opt_nums[0]), str(opt_nums[1])]:
+                            choice_idx = int(char) - 1
+                            print(f"[INFO] 成功在这一组中解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
+                            return choice_idx
+                    # 如果返回 0 或未匹配到有效编号，说明答案不在这组，跳出重试检查下一组
+                    break
+                else:
+                    print(f"[ERROR] Groq API 请求失败: {response.text}")
+            except Exception as e:
+                print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
+            
+            if attempt < max_retries:
+                await asyncio.sleep(2)
         
     return None
 
@@ -126,7 +127,7 @@ async def run_renew():
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
-            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq API 一次性识别...")
+            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq API 分组识别...")
             
             try:
                 await page.wait_for_selector('div.auth-captcha-prompt strong', timeout=5000)
