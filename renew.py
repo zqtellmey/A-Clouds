@@ -4,8 +4,6 @@ import os
 import base64
 import requests
 from datetime import datetime, timezone
-from PIL import Image
-import io
 from playwright.async_api import async_playwright
 
 # 环境变量读取
@@ -32,27 +30,10 @@ def send_tg_msg(text):
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
-def stitch_images_to_grid(image_bytes_list):
-    """
-    将 4 张验证码图片拼接成一个 2x2 的大图，并贴上 1、2、3、4 的序号，
-    这样只需要发 1 次请求给 Groq，彻底解决 TPM 429 超限和思维链浪费问题。
-    """
-    images = [Image.open(io.BytesIO(b)).convert("RGB") for b in image_bytes_list]
-    w, h = images[0].size
-    
-    # 创建 2x2 拼图画布
-    grid_img = Image.new("RGB", (w * 2, h * 2), (255, 255, 255))
-    grid_img.paste(images[0], (0, 0))
-    grid_img.paste(images[1], (w, 0))
-    grid_img.paste(images[2], (0, h))
-    grid_img.paste(images[3], (w, h))
-    
-    # 转换为字节
-    output = io.BytesIO()
-    grid_img.save(output, format="JPEG", quality=85)
-    return output.getvalue()
-
 async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
+    """
+    将 4 张图片在单次请求中全部发给 Groq，无需 PIL 库，彻底省时且避开 TPM 429 限制
+    """
     if not GROQ_API_KEY:
         print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
         return None
@@ -63,20 +44,20 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
-    # 将 4 张图拼接为 1 张 2x2 拼图
-    grid_bytes = stitch_images_to_grid(image_bytes_list)
-    b64_data = base64.b64encode(grid_bytes).decode('utf-8')
-
     content_parts = [
-        {"type": "text", "text": f"This is a 2x2 grid image containing 4 options (Top-Left is 1, Top-Right is 2, Bottom-Left is 3, Bottom-Right is 4). Which option (1, 2, 3, or 4) matches, represents, or contains '{target_word}'? Output ONLY the single digit number."},
-        {
+        {"type": "text", "text": f"Here are 4 captcha option images labeled Option 1, Option 2, Option 3, and Option 4. Which option matches '{target_word}'? Output ONLY the single digit number (1, 2, 3, or 4). Do not output any explanation."}
+    ]
+    
+    for i, img_bytes in enumerate(image_bytes_list):
+        b64_data = base64.b64encode(img_bytes).decode('utf-8')
+        content_parts.append({"type": "text", "text": f"Option {i + 1}:"})
+        content_parts.append({
             "type": "image_url",
             "image_url": {
                 "url": f"data:image/jpeg;base64,{b64_data}"
             }
-        }
-    ]
-    
+        })
+        
     payload = {
         "model": "qwen/qwen3.6-27b",
         "messages": [{"role": "user", "content": content_parts}],
@@ -86,7 +67,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
 
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"[INFO] 正在将 4合1 拼图验证码发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
+            print(f"[INFO] 正在将 4 张图片一次性发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
             response = requests.post(url, json=payload, headers=headers, timeout=30)
             if response.status_code == 200:
                 res_json = response.json()
@@ -145,7 +126,7 @@ async def run_renew():
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
-            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq 4合1 拼图识别...")
+            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq 一次性识别...")
             
             try:
                 await page.wait_for_selector('div.auth-captcha-prompt strong', timeout=5000)
