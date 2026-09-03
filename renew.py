@@ -32,50 +32,59 @@ def send_tg_msg(text):
 
 async def ask_gemini_for_captcha(image_bytes_list, target_word):
     """
-    逐张依次请求 Gemini API 识别图片是否符合 target_word，一旦命中即返回该索引 (0-3)
+    一次性将 4 张图片传给 Gemini API，让其选出符合 target_word 的选项编号 (1-4)
     """
     if not GEMINI_API_KEY:
         print("[ERROR] 未配置 GEMINI_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    
+    print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Gemini (目标: {target_word})...")
+    
+    # 构造多模态 parts：包含提示词和 4 张图片
+    parts = [
+        {"text": f"These 4 images are options 1, 2, 3, and 4. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number of the correct image (1, 2, 3, or 4)."}
+    ]
     
     for idx, img_bytes in enumerate(image_bytes_list):
-        print(f"[INFO] 正在让 Gemini 检查第 {idx + 1} 张图片 (目标: {target_word})...")
         b64_data = base64.b64encode(img_bytes).decode('utf-8')
+        parts.append({"text": f"Option {idx + 1}:"})
+        parts.append({
+            "inline_data": {
+                "mime_type": "image/jpeg",
+                "data": b64_data
+            }
+        })
         
-        payload = {
-            "contents": [
-                {
-                    "parts": [
-                        {"text": f"Does this image represent, contain, or match the concept/word '{target_word}'? Answer ONLY with 'YES' or 'NO'."},
-                        {
-                            "inline_data": {
-                                "mime_type": "image/jpeg",
-                                "data": b64_data
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
-        
-        try:
-            # 延长超时到 30 秒
-            response = requests.post(url, json=payload, timeout=30)
-            if response.status_code == 200:
-                res_json = response.json()
-                # 修复：正确使用 [0] 获取 candidates 列表和 parts 列表中的元素
-                text = res_json['candidates'][0]['content']['parts'][0]['text'].strip().upper()
-                print(f"[INFO] 第 {idx + 1} 张图片检测结果: {text}")
-                if "YES" in text:
-                    print(f"[INFO] 命中正确图片，索引为: {idx}")
-                    return idx
-            else:
-                print(f"[ERROR] Gemini API 请求失败: {response.text}")
-        except Exception as e:
-            print(f"[ERROR] 调用 Gemini API 异常 (第 {idx + 1} 张): {e}")
+    payload = {
+        "contents": [
+            {
+                "parts": parts
+            }
+        ]
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=30)
+        if response.status_code == 200:
+            res_json = response.json()
+            text = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
+            print(f"[INFO] Gemini 返回结果: {text}")
             
+            # 从返回文本中提取数字 1-4
+            for char in text:
+                if char in ['1', '2', '3', '4']:
+                    choice_idx = int(char) - 1
+                    print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
+                    return choice_idx
+                    
+            print(f"[ERROR] 未能从 Gemini 返回结果中提取到有效编号: {text}")
+        else:
+            print(f"[ERROR] Gemini API 请求失败: {response.text}")
+    except Exception as e:
+        print(f"[ERROR] 调用 Gemini API 异常: {e}")
+        
     return None
 
 async def run_renew():
@@ -107,7 +116,7 @@ async def run_renew():
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
-            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Gemini API 逐张排查...")
+            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Gemini API 一次性识别...")
             prompt_locator = page.locator('div.auth-captcha-prompt strong')
             if await prompt_locator.count() > 0:
                 target_word = await prompt_locator.inner_text()
@@ -119,10 +128,11 @@ async def run_renew():
                     image_bytes_list = []
                     for i in range(4):
                         img_element = option_buttons.nth(i).locator('img.auth-captcha-option-img')
-                        img_bytes = await img_element.screenshot(type="jpeg", quality=80)
+                        # 压缩质量设为 40，减小图片体积，防止单次请求过大导致超时
+                        img_bytes = await img_element.screenshot(type="jpeg", quality=40)
                         image_bytes_list.append(img_bytes)
                     
-                    # 逐张轮流调用 Gemini 识别
+                    # 一次性发送 4 张图片让 Gemini 识别
                     correct_index = await ask_gemini_for_captcha(image_bytes_list, target_word)
                     if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
