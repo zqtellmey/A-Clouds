@@ -38,7 +38,8 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         print("[ERROR] 未配置 GEMINI_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # 已将模型更新为支持的 gemini-2.5-flash
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     parts_list = [
         {"text": f"You are an image classification assistant. Look at these 4 images. Which one best represents or contains the concept/word '{target_word}'? Reply ONLY with the index number of the correct image (0, 1, 2, or 3). Do not output any other text."}
