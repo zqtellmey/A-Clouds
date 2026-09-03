@@ -4,6 +4,8 @@ import os
 import base64
 import requests
 from datetime import datetime, timezone
+from PIL import Image
+import io
 from playwright.async_api import async_playwright
 
 # 环境变量读取
@@ -30,10 +32,27 @@ def send_tg_msg(text):
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
+def stitch_images_to_grid(image_bytes_list):
+    """
+    将 4 张验证码图片拼接成一个 2x2 的大图，并贴上 1、2、3、4 的序号，
+    这样只需要发 1 次请求给 Groq，彻底解决 TPM 429 超限和思维链浪费问题。
+    """
+    images = [Image.open(io.BytesIO(b)).convert("RGB") for b in image_bytes_list]
+    w, h = images[0].size
+    
+    # 创建 2x2 拼图画布
+    grid_img = Image.new("RGB", (w * 2, h * 2), (255, 255, 255))
+    grid_img.paste(images[0], (0, 0))
+    grid_img.paste(images[1], (w, 0))
+    grid_img.paste(images[2], (0, h))
+    grid_img.paste(images[3], (w, h))
+    
+    # 转换为字节
+    output = io.BytesIO()
+    grid_img.save(output, format="JPEG", quality=85)
+    return output.getvalue()
+
 async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
-    """
-    分两次发送 2 张图，强化过滤 <think> 标签，并加大组间间隔防止触发 TPM 429
-    """
     if not GROQ_API_KEY:
         print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
         return None
@@ -44,67 +63,57 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
-    batches = [
-        (0, 1, [1, 2]),
-        (2, 3, [3, 4])
-    ]
+    # 将 4 张图拼接为 1 张 2x2 拼图
+    grid_bytes = stitch_images_to_grid(image_bytes_list)
+    b64_data = base64.b64encode(grid_bytes).decode('utf-8')
 
-    for idx_group, (start_idx, end_idx, opt_nums) in enumerate(batches):
-        if idx_group > 0:
-            print("[INFO] 等待 8 秒以防触发 Groq TPM 限制...")
-            await asyncio.sleep(8)
-
-        content_parts = [
-            {"type": "text", "text": f"Which of these two options ({opt_nums[0]} or {opt_nums[1]}) matches '{target_word}'? Output ONLY the digit {opt_nums[0]} or {opt_nums[1]}. Do not output any explanation or think process."}
-        ]
-        
-        for i in range(start_idx, end_idx + 1):
-            img_bytes = image_bytes_list[i]
-            b64_data = base64.b64encode(img_bytes).decode('utf-8')
-            content_parts.append({"type": "text", "text": f"Option {i + 1}:"})
-            content_parts.append({
-                "type": "image_url",
-                "image_url": {
-                    "url": f"data:image/jpeg;base64,{b64_data}"
-                }
-            })
-            
-        payload = {
-            "model": "qwen/qwen3.6-27b",
-            "messages": [{"role": "user", "content": content_parts}],
-            "max_tokens": 15,
-            "temperature": 0
+    content_parts = [
+        {"type": "text", "text": f"This is a 2x2 grid image containing 4 options (Top-Left is 1, Top-Right is 2, Bottom-Left is 3, Bottom-Right is 4). Which option (1, 2, 3, or 4) matches, represents, or contains '{target_word}'? Output ONLY the single digit number."},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{b64_data}"
+            }
         }
+    ]
+    
+    payload = {
+        "model": "qwen/qwen3.6-27b",
+        "messages": [{"role": "user", "content": content_parts}],
+        "max_tokens": 30,
+        "temperature": 0
+    }
 
-        for attempt in range(1, max_retries + 1):
-            try:
-                print(f"[INFO] 正在将选项 {opt_nums} 发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
-                response = requests.post(url, json=payload, headers=headers, timeout=30)
-                if response.status_code == 200:
-                    res_json = response.json()
-                    text = res_json['choices'][0]['message']['content'].strip()
-                    print(f"[INFO] Groq 返回结果 (选项 {opt_nums}): {text}")
-                    
-                    # 完美剥离 <think>...</think> 标签，只看思考结束后的真实输出
-                    if "</think>" in text:
-                        text = text.split("</think>")[-1].strip()
-                    
-                    for char in text:
-                        if char in [str(opt_nums[0]), str(opt_nums[1])]:
-                            choice_idx = int(char) - 1
-                            print(f"[INFO] 成功在这一组中解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
-                            return choice_idx
-                    break
-                elif response.status_code == 429:
-                    print(f"[WARNING] 触发频率限制 (429)，等待 15 秒后重试...")
-                    await asyncio.sleep(15)
-                else:
-                    print(f"[ERROR] Groq API 请求失败: {response.text}")
-            except Exception as e:
-                print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
-            
-            if attempt < max_retries:
-                await asyncio.sleep(3)
+    for attempt in range(1, max_retries + 1):
+        try:
+            print(f"[INFO] 正在将 4合1 拼图验证码发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            if response.status_code == 200:
+                res_json = response.json()
+                text = res_json['choices'][0]['message']['content'].strip()
+                print(f"[INFO] Groq 完整返回: {text}")
+                
+                # 剥离 <think>...</think> 标签
+                if "</think>" in text:
+                    text = text.split("</think>")[-1].strip()
+                
+                # 提取数字
+                for char in text:
+                    if char in ['1', '2', '3', '4']:
+                        choice_idx = int(char) - 1
+                        print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 个选项)")
+                        return choice_idx
+                print(f"[WARNING] 返回文本中未找到有效数字，重试...")
+            elif response.status_code == 429:
+                print(f"[WARNING] 触发频率限制 (429)，等待 15 秒后重试...")
+                await asyncio.sleep(15)
+            else:
+                print(f"[ERROR] Groq API 请求失败: {response.text}")
+        except Exception as e:
+            print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
+        
+        if attempt < max_retries:
+            await asyncio.sleep(3)
         
     return None
 
@@ -136,7 +145,7 @@ async def run_renew():
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
-            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq API 分组识别...")
+            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq 4合1 拼图识别...")
             
             try:
                 await page.wait_for_selector('div.auth-captcha-prompt strong', timeout=5000)
