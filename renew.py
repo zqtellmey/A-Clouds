@@ -32,7 +32,7 @@ def send_tg_msg(text):
 
 async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     """
-    因为 Groq 限制单次最多传 3 张图，我们将 4 张图分为两组（1-2张一组，3-4张一组）分别请求
+    分两次发送 2 张图，限制 temperature=0 避免思维链污染，并加入间隔防 TPM 频控
     """
     if not GROQ_API_KEY:
         print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
@@ -44,15 +44,19 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
-    # 分为两组：组1 (对应选项 1 和 2), 组2 (对应选项 3 和 4)
     batches = [
         (0, 1, [1, 2]),
         (2, 3, [3, 4])
     ]
 
-    for start_idx, end_idx, opt_nums in batches:
+    for idx_group, (start_idx, end_idx, opt_nums) in enumerate(batches):
+        # 如果不是第一组，歇几秒再发，防止触发 TPM 频率限制
+        if idx_group > 0:
+            print("[INFO] 等待 4 秒以防触发 Groq TPM 限制...")
+            await asyncio.sleep(4)
+
         content_parts = [
-            {"type": "text", "text": f"These 2 images are options {opt_nums[0]} and {opt_nums[1]}. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number ({opt_nums[0]} or {opt_nums[1]}), or 0 if neither matches."}
+            {"type": "text", "text": f"Task: Which of these two options ({opt_nums[0]} or {opt_nums[1]}) matches '{target_word}'? Output ONLY the single number. No explanation."}
         ]
         
         for i in range(start_idx, end_idx + 1):
@@ -69,10 +73,10 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         payload = {
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": content_parts}],
-            "max_tokens": 10
+            "max_tokens": 15,
+            "temperature": 0
         }
 
-        # 针对当前组进行带重试的请求
         for attempt in range(1, max_retries + 1):
             try:
                 print(f"[INFO] 正在将选项 {opt_nums} 发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
@@ -82,20 +86,24 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     text = res_json['choices'][0]['message']['content'].strip()
                     print(f"[INFO] Groq 返回结果 (选项 {opt_nums}): {text}")
                     
-                    for char in text:
+                    # 清洗文本，过滤掉可能的思维链标签
+                    clean_text = text.replace("<think>", "").replace("</think>", "")
+                    for char in clean_text:
                         if char in [str(opt_nums[0]), str(opt_nums[1])]:
                             choice_idx = int(char) - 1
                             print(f"[INFO] 成功在这一组中解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
                             return choice_idx
-                    # 如果返回 0 或未匹配到有效编号，说明答案不在这组，跳出重试检查下一组
                     break
+                elif response.status_code == 429:
+                    print(f"[WARNING] 触发频率限制 (429)，等待 15 秒后重试...")
+                    await asyncio.sleep(15)
                 else:
                     print(f"[ERROR] Groq API 请求失败: {response.text}")
             except Exception as e:
                 print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
             
             if attempt < max_retries:
-                await asyncio.sleep(2)
+                await asyncio.sleep(3)
         
     return None
 
