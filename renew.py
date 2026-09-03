@@ -145,8 +145,8 @@ async def run_renew():
                 print(f"[WARNING] 未能定位到验证码提示词元素: {e}")
 
             if await prompt_locator.count() > 0:
-                target_word = await prompt_locator.inner_text()
-                print(f"[INFO] 成功获取目标验证词汇: {target_word}")
+                initial_target_word = await prompt_locator.inner_text()
+                print(f"[INFO] 成功获取目标验证词汇: {initial_target_word}")
                 
                 option_buttons = page.locator('button.auth-captcha-option')
                 count = await option_buttons.count()
@@ -160,15 +160,18 @@ async def run_renew():
                         image_bytes_list.append(img_bytes)
                     print("[INFO] 已成功截取 4 个选项的图片，准备调用 Groq...")
                     
-                    correct_index = await ask_groq_for_captcha(image_bytes_list, target_word)
-                    if correct_index is not None and 0 <= correct_index < 4:
+                    correct_index = await ask_groq_for_captcha(image_bytes_list, initial_target_word)
+                    
+                    # 校验在等待 AI 期间验证码是否已经刷新改变了
+                    current_target_word = await prompt_locator.inner_text() if await prompt_locator.count() > 0 else ""
+                    if current_target_word != initial_target_word:
+                        print(f"[WARNING] 验证码在识别期间已刷新！原目标: '{initial_target_word}', 现目标: '{current_target_word}'，放弃本次点击。")
+                    elif correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
                         
-                        # 采用 JS 强制触发点击
                         await option_buttons.nth(correct_index).evaluate("el => el.click()")
                         await asyncio.sleep(3)
                         
-                        # 点击完立刻截图并发送到 Telegram 查看现场情况
                         await page.screenshot(path="captcha_clicked.png")
                         send_tg_photo(f"已点击第 {correct_index + 1} 个选项后的页面状态", "captcha_clicked.png")
                         
