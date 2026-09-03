@@ -61,11 +61,12 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         }
         
         try:
-            response = requests.post(url, json=payload, timeout=20)
+            # 延长超时到 30 秒
+            response = requests.post(url, json=payload, timeout=30)
             if response.status_code == 200:
                 res_json = response.json()
-                # 修复：正确通过 [0] 下标获取 candidates 列表中的字典
-                text = res_json['candidates']['content']['parts']['text'].strip().upper()
+                # 修复：正确使用 [0] 获取 candidates 列表和 parts 列表中的元素
+                text = res_json['candidates'][0]['content']['parts'][0]['text'].strip().upper()
                 print(f"[INFO] 第 {idx + 1} 张图片检测结果: {text}")
                 if "YES" in text:
                     print(f"[INFO] 命中正确图片，索引为: {idx}")
