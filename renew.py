@@ -38,7 +38,6 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         print("[ERROR] 未配置 GEMINI_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
-    # 已将模型更新为支持的 gemini-3.6-flash
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     
     parts_list = [
@@ -67,6 +66,7 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         response = requests.post(url, json=payload, timeout=15)
         if response.status_code == 200:
             res_json = response.json()
+            # 修正列表索引访问方式
             text = res_json['candidates']['content']['parts']['text'].strip()
             print(f"[INFO] Gemini 识别返回结果: {text}")
             for char in text:
@@ -104,18 +104,15 @@ async def run_renew():
         
         # 检查 aria-checked 属性判断是否直接打勾，或是弹出了图片选择框
         try:
-            # 最多等待 3 秒检查 aria-checked="true"
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
             print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Gemini API 处理...")
-            # 获取需要寻找的目标单词
             prompt_locator = page.locator('div.auth-captcha-prompt strong')
             if await prompt_locator.count() > 0:
                 target_word = await prompt_locator.inner_text()
                 print(f"[INFO] 目标验证词汇: {target_word}")
                 
-                # 获取 4 个选项按钮
                 option_buttons = page.locator('button.auth-captcha-option')
                 count = await option_buttons.count()
                 if count == 4:
@@ -125,15 +122,25 @@ async def run_renew():
                         img_bytes = await img_element.screenshot()
                         image_bytes_list.append(img_bytes)
                     
-                    # 调用 Gemini 进行识别
                     correct_index = await ask_gemini_for_captcha(image_bytes_list, target_word)
                     if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
                         await option_buttons.nth(correct_index).click()
-                        # 等待 aria-checked 变为 true
-                        await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=15000)
+                        try:
+                            await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=15000)
+                        except:
+                            print("[ERROR] 点击选项后验证码仍未勾选成功")
                     else:
                         print("[ERROR] 未能通过 Gemini 正确识别出验证选项")
+
+        # 检查最终是否成功打勾，如果未打勾则直接终止后续所有操作
+        checkbox_elem = page.locator('div.auth-captcha-inner[role="checkbox"]')
+        is_checked = await checkbox_elem.get_attribute("aria-checked")
+        if is_checked != "true":
+            print("[ERROR] 人机验证未通过，终止后续所有操作。")
+            send_tg_msg("登录失败：人机验证未通过，流程已终止。")
+            await browser.close()
+            return
 
         await page.screenshot(path="step2.png")
         send_tg_photo("验证码已打勾", "step2.png")
