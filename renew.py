@@ -89,7 +89,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     if "</think>" in clean_text:
                         clean_text = clean_text.split("</think>")[-1].strip()
                     
-                    # 通过正则匹配查找文本中所有出现的 1 或 2，取【最后一个】作为最终答案
+                    # 修复点：通过正则匹配查找文本中所有出现的 1 或 2，取【最后一个】作为最终答案，避开前文序号干扰
                     matches = re.findall(r'\b([12])\b', clean_text)
                     if matches:
                         char = matches[-1]
