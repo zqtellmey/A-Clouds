@@ -32,7 +32,7 @@ def send_tg_msg(text):
 
 async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     """
-    分两次发送 2 张图，限制 temperature=0 避免思维链污染，并加入间隔防 TPM 频控
+    分两次发送 2 张图，强化过滤 <think> 标签，并加大组间间隔防止触发 TPM 429
     """
     if not GROQ_API_KEY:
         print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
@@ -50,13 +50,12 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     ]
 
     for idx_group, (start_idx, end_idx, opt_nums) in enumerate(batches):
-        # 如果不是第一组，歇几秒再发，防止触发 TPM 频率限制
         if idx_group > 0:
-            print("[INFO] 等待 4 秒以防触发 Groq TPM 限制...")
-            await asyncio.sleep(4)
+            print("[INFO] 等待 8 秒以防触发 Groq TPM 限制...")
+            await asyncio.sleep(8)
 
         content_parts = [
-            {"type": "text", "text": f"Task: Which of these two options ({opt_nums[0]} or {opt_nums[1]}) matches '{target_word}'? Output ONLY the single number. No explanation."}
+            {"type": "text", "text": f"Which of these two options ({opt_nums[0]} or {opt_nums[1]}) matches '{target_word}'? Output ONLY the digit {opt_nums[0]} or {opt_nums[1]}. Do not output any explanation or think process."}
         ]
         
         for i in range(start_idx, end_idx + 1):
@@ -86,9 +85,11 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     text = res_json['choices'][0]['message']['content'].strip()
                     print(f"[INFO] Groq 返回结果 (选项 {opt_nums}): {text}")
                     
-                    # 清洗文本，过滤掉可能的思维链标签
-                    clean_text = text.replace("<think>", "").replace("</think>", "")
-                    for char in clean_text:
+                    # 完美剥离 <think>...</think> 标签，只看思考结束后的真实输出
+                    if "</think>" in text:
+                        text = text.split("</think>")[-1].strip()
+                    
+                    for char in text:
                         if char in [str(opt_nums[0]), str(opt_nums[1])]:
                             choice_idx = int(char) - 1
                             print(f"[INFO] 成功在这一组中解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
