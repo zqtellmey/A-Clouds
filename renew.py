@@ -128,6 +128,13 @@ async def run_renew():
             print("[INFO] 验证码直接打勾通过！")
         except:
             print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq API 一次性识别...")
+            
+            # 确保弹窗和目标文字加载完成
+            try:
+                await page.wait_for_selector('div.auth-captcha-prompt strong', timeout=5000)
+            except:
+                print("[WARNING] 等待验证码提示词超时")
+
             prompt_locator = page.locator('div.auth-captcha-prompt strong')
             if await prompt_locator.count() > 0:
                 target_word = await prompt_locator.inner_text()
@@ -135,6 +142,8 @@ async def run_renew():
                 
                 option_buttons = page.locator('button.auth-captcha-option')
                 count = await option_buttons.count()
+                print(f"[INFO] 检测到验证码选项数量: {count}")
+                
                 if count == 4:
                     image_bytes_list = []
                     for i in range(4):
@@ -148,10 +157,13 @@ async def run_renew():
                         await option_buttons.nth(correct_index).click()
                         try:
                             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=15000)
+                            print("[INFO] 验证码已成功勾选！")
                         except:
                             print("[ERROR] 点击选项后验证码仍未勾选成功")
                     else:
                         print("[ERROR] 未能通过 Groq 正确识别出验证选项")
+                else:
+                    print(f"[ERROR] 选项数量不为 4，当前数量为: {count}")
 
         # 检查最终是否成功打勾，如果未打勾则直接终止后续所有操作
         checkbox_elem = page.locator('div.auth-captcha-inner[role="checkbox"]')
@@ -244,7 +256,7 @@ async def run_renew():
                 else:
                     send_tg_msg(f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ℹ️ 无需续期操作")
         
-        await browser.close()
+        browser.close()
 
 if __name__ == "__main__":
     asyncio.run(run_renew())
