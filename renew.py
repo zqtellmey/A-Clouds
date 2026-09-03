@@ -2,6 +2,7 @@
 import asyncio
 import os
 import base64
+import re
 import requests
 from datetime import datetime, timezone
 from playwright.async_api import async_playwright
@@ -52,7 +53,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
             await asyncio.sleep(8)
 
         content_parts = [
-            {"type": "text", "text": f"Target: '{target_word}'. Which option is correct? Answer ONLY 1 or 2."}
+            {"type": "text", "text": f"Target: '{target_word}'. Which option is correct? Answer ONLY 1 or 2 at the very end."}
         ]
         
         for local_idx, global_idx in enumerate(img_indices):
@@ -88,13 +89,14 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     if "</think>" in clean_text:
                         clean_text = clean_text.split("</think>")[-1].strip()
                     
-                    for char in clean_text:
-                        if char in ['1', '2']:
-                            # 将模型回答的 1 或 2 映射为全局索引
-                            choice_idx = base_offset + (int(char) - 1)
-                            print(f"[INFO] 找到正确选项: 全局第 {choice_idx + 1} 个")
-                            return choice_idx
-                    # 如果这组没找到答案，跳出重试循环，进入下一组
+                    # 修复点：通过正则匹配查找文本中所有出现的 1 或 2，取【最后一个】作为最终答案，避开前文序号干扰
+                    matches = re.findall(r'\b([12])\b', clean_text)
+                    if matches:
+                        char = matches[-1]
+                        choice_idx = base_offset + (int(char) - 1)
+                        print(f"[INFO] 找到正确选项: 全局第 {choice_idx + 1} 个")
+                        return choice_idx
+                    
                     break
                 elif response.status_code == 429:
                     print("[WARNING] 触发 429 频率限制，等待重试...")
