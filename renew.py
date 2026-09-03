@@ -11,7 +11,7 @@ EMAIL = os.environ.get("ACLCLOUDS_EMAIL", "").strip()
 PASSWORD = os.environ.get("ACLCLOUDS_PASSWORD", "").strip()
 TG_BOT_TOKEN = os.environ.get("TG_BOT_TOKEN", "").strip()
 TG_CHAT_ID = os.environ.get("TG_CHAT_ID", "").strip()
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
 
 def send_tg_photo(caption, photo_path):
     if not TG_BOT_TOKEN or not TG_CHAT_ID or not os.path.exists(photo_path):
@@ -30,47 +30,55 @@ def send_tg_msg(text):
         final_text = f"<b>ACLClouds</b>\n{text}"
         requests.post(url, json={"chat_id": TG_CHAT_ID, "text": final_text, "parse_mode": "HTML"})
 
-async def ask_gemini_for_captcha(image_bytes_list, target_word, max_retries=3):
+async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     """
-    一次性将 4 张图片传给 Gemini API，内置自动重试机制以应对偶尔的超时
+    使用 Groq API（OpenAI 兼容多模态格式）一次性将 4 张图片传给模型，内置自动重试机制
     """
-    if not GEMINI_API_KEY:
-        print("[ERROR] 未配置 GEMINI_API_KEY 环境变量，无法识别验证码图片！")
+    if not GROQ_API_KEY:
+        print("[ERROR] 未配置 GROQ_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
+    url = "https://api.groq.com/openai/v1/chat/completions"
     
-    parts = [
-        {"text": f"These 4 images are options 1, 2, 3, and 4. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number of the correct image (1, 2, 3, or 4)."}
+    content_parts = [
+        {"type": "text", "text": f"These 4 images are options 1, 2, 3, and 4. Which one of these images represents, contains, or matches the concept/word '{target_word}'? Answer ONLY with the number of the correct image (1, 2, 3, or 4)."}
     ]
     
     for idx, img_bytes in enumerate(image_bytes_list):
         b64_data = base64.b64encode(img_bytes).decode('utf-8')
-        parts.append({"text": f"Option {idx + 1}:"})
-        parts.append({
-            "inline_data": {
-                "mime_type": "image/jpeg",
-                "data": b64_data
+        content_parts.append({"type": "text", "text": f"Option {idx + 1}:"})
+        content_parts.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{b64_data}"
             }
         })
         
     payload = {
-        "contents": [
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "messages": [
             {
-                "parts": parts
+                "role": "user",
+                "content": content_parts
             }
-        ]
+        ],
+        "max_tokens": 10
+    }
+    
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
     
     # 增加自动重试循环
     for attempt in range(1, max_retries + 1):
         try:
-            print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Gemini (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
-            response = requests.post(url, json=payload, timeout=30)
+            print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Groq (目标: {target_word}) [尝试 {attempt}/{max_retries}]...")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
             if response.status_code == 200:
                 res_json = response.json()
-                text = res_json['candidates'][0]['content']['parts'][0]['text'].strip()
-                print(f"[INFO] Gemini 返回结果: {text}")
+                text = res_json['choices'][0]['message']['content'].strip()
+                print(f"[INFO] Groq 返回结果: {text}")
                 
                 for char in text:
                     if char in ['1', '2', '3', '4']:
@@ -78,11 +86,11 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word, max_retries=3):
                         print(f"[INFO] 成功解析出正确选项索引: {choice_idx} (对应第 {char} 张)")
                         return choice_idx
                         
-                print(f"[ERROR] 未能从 Gemini 返回结果中提取到有效编号: {text}")
+                print(f"[ERROR] 未能从 Groq 返回结果中提取到有效编号: {text}")
             else:
-                print(f"[ERROR] Gemini API 请求失败: {response.text}")
+                print(f"[ERROR] Groq API 请求失败: {response.text}")
         except Exception as e:
-            print(f"[ERROR] 调用 Gemini API 异常 (尝试 {attempt}/{max_retries}): {e}")
+            print(f"[ERROR] 调用 Groq API 异常 (尝试 {attempt}/{max_retries}): {e}")
         
         if attempt < max_retries:
             print("[INFO] 等待 2 秒后进行重试...")
@@ -119,7 +127,7 @@ async def run_renew():
             await page.wait_for_selector('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]', timeout=3000)
             print("[INFO] 验证码直接打勾通过！")
         except:
-            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Gemini API 一次性识别...")
+            print("[INFO] 未直接打勾，检测到图形验证弹窗，开始使用 Groq API 一次性识别...")
             prompt_locator = page.locator('div.auth-captcha-prompt strong')
             if await prompt_locator.count() > 0:
                 target_word = await prompt_locator.inner_text()
@@ -134,7 +142,7 @@ async def run_renew():
                         img_bytes = await img_element.screenshot(type="jpeg", quality=40)
                         image_bytes_list.append(img_bytes)
                     
-                    correct_index = await ask_gemini_for_captcha(image_bytes_list, target_word)
+                    correct_index = await ask_groq_for_captcha(image_bytes_list, target_word)
                     if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
                         await option_buttons.nth(correct_index).click()
@@ -143,7 +151,7 @@ async def run_renew():
                         except:
                             print("[ERROR] 点击选项后验证码仍未勾选成功")
                     else:
-                        print("[ERROR] 未能通过 Gemini 正确识别出验证选项")
+                        print("[ERROR] 未能通过 Groq 正确识别出验证选项")
 
         # 检查最终是否成功打勾，如果未打勾则直接终止后续所有操作
         checkbox_elem = page.locator('div.auth-captcha-inner[role="checkbox"]')
