@@ -48,7 +48,7 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         b64_data = base64.b64encode(img_bytes).decode('utf-8')
         parts_list.append({
             "inline_data": {
-                "mime_type": "image/png",
+                "mime_type": "image/jpeg",
                 "data": b64_data
             }
         })
@@ -63,10 +63,10 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
     }
     
     try:
-        response = requests.post(url, json=payload, timeout=15)
+        # 将超时时间从 15 秒延长到 30 秒
+        response = requests.post(url, json=payload, timeout=30)
         if response.status_code == 200:
             res_json = response.json()
-            # 修复：正确通过下标访问 candidates 列表中的元素
             text = res_json['candidates']['content']['parts']['text'].strip()
             print(f"[INFO] Gemini 识别返回结果: {text}")
             for char in text:
@@ -119,7 +119,8 @@ async def run_renew():
                     image_bytes_list = []
                     for i in range(4):
                         img_element = option_buttons.nth(i).locator('img.auth-captcha-option-img')
-                        img_bytes = await img_element.screenshot()
+                        # 使用 JPEG 格式并降低质量以减小数据包大小，防止网络超时
+                        img_bytes = await img_element.screenshot(type="jpeg", quality=80)
                         image_bytes_list.append(img_bytes)
                     
                     correct_index = await ask_gemini_for_captcha(image_bytes_list, target_word)
