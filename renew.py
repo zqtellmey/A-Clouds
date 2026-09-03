@@ -40,27 +40,26 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
     
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
-    contents = [
-        {
-            "parts": [
-                {"text": f"You are an image classification assistant. Look at these 4 images. Which one best represents or contains the concept/word '{target_word}'? Reply ONLY with the index number of the correct image (0, 1, 2, or 3). Do not output any other text."}
-            ]
-        }
+    parts_list = [
+        {"text": f"You are an image classification assistant. Look at these 4 images. Which one best represents or contains the concept/word '{target_word}'? Reply ONLY with the index number of the correct image (0, 1, 2, or 3). Do not output any other text."}
     ]
     
     for idx, img_bytes in enumerate(image_bytes_list):
         b64_data = base64.b64encode(img_bytes).decode('utf-8')
-        contents["parts"].append({
+        parts_list.append({
             "inline_data": {
                 "mime_type": "image/png",
                 "data": b64_data
             }
         })
-        # 加上提示对应编号
-        contents["parts"].append({"text": f"Image {idx}"})
+        parts_list.append({"text": f"Image {idx}"})
 
     payload = {
-        "contents": contents
+        "contents": [
+            {
+                "parts": parts_list
+            }
+        ]
     }
     
     try:
@@ -148,10 +147,10 @@ async def run_renew():
             pass
 
         await page.screenshot(path="step3.png")
-        send_tg_photo("最終登录结果", "step3.png")
+        send_tg_photo("最终登录结果", "step3.png")
         # --- 登录部分结束 ---
 
-        # 1. 统一进入项目页（已更新为新地址）
+        # 1. 统一进入项目页
         await page.goto("https://aclclouds.com/dashboard/projects", wait_until="networkidle")
         
         # 2. 优先处理 Reactivate
@@ -183,8 +182,8 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                # 若小于20小时，则寻找并 Renew
-                if hours_left < 20:
+                # 若小于2小时，则寻找并 Renew
+                if hours_left < 2:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
