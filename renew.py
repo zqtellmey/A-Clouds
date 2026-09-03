@@ -38,7 +38,8 @@ async def ask_gemini_for_captcha(image_bytes_list, target_word):
         print("[ERROR] 未配置 GEMINI_API_KEY 环境变量，无法识别验证码图片！")
         return None
     
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # 修正：使用 gemini-3.6-flash 模型
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key={GEMINI_API_KEY}"
     
     print(f"[INFO] 正在将 4 张验证码图片一次性打包发送给 Gemini (目标: {target_word})...")
     
