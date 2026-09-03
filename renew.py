@@ -41,23 +41,24 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
+    # 批次定义：每批 2 张图。base_offset 用于计算全局索引
     batches = [
-        ([0, 1], [1, 2]),  
-        ([2, 3], [3, 4])   
+        ([0, 1], 0),  # 第一组：全局图 0, 1 -> 对应模型眼中的 Option 1, 2
+        ([2, 3], 2)   # 第二组：全局图 2, 3 -> 对应模型眼中的 Option 1, 2
     ]
 
-    for idx_group, (img_indices, opt_nums) in enumerate(batches):
+    for idx_group, (img_indices, base_offset) in enumerate(batches):
         if idx_group > 0:
             await asyncio.sleep(8)
 
         content_parts = [
-            {"type": "text", "text": f"Target: '{target_word}'. Which option is correct? Answer ONLY {opt_nums[0]} or {opt_nums[1]}."}
+            {"type": "text", "text": f"Target: '{target_word}'. Which option is correct? Answer ONLY 1 or 2."}
         ]
         
-        for idx in img_indices:
-            img_bytes = image_bytes_list[idx]
+        for local_idx, global_idx in enumerate(img_indices):
+            img_bytes = image_bytes_list[global_idx]
             b64_data = base64.b64encode(img_bytes).decode('utf-8')
-            content_parts.append({"type": "text", "text": f"Option {idx + 1}:"})
+            content_parts.append({"type": "text", "text": f"Option {local_idx + 1}:"})
             content_parts.append({
                 "type": "image_url",
                 "image_url": {
@@ -88,10 +89,12 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                         clean_text = clean_text.split("</think>")[-1].strip()
                     
                     for char in clean_text:
-                        if char in [str(opt_nums[0]), str(opt_nums[1])]:
-                            choice_idx = int(char) - 1
-                            print(f"[INFO] 找到正确选项: 第 {char} 个")
+                        if char in ['1', '2']:
+                            # 将模型回答的 1 或 2 映射为全局索引
+                            choice_idx = base_offset + (int(char) - 1)
+                            print(f"[INFO] 找到正确选项: 全局第 {choice_idx + 1} 个")
                             return choice_idx
+                    # 如果这组没找到答案，跳出重试循环，进入下一组
                     break
                 elif response.status_code == 429:
                     print("[WARNING] 触发 429 频率限制，等待重试...")
@@ -145,8 +148,8 @@ async def run_renew():
                 print(f"[WARNING] 未能定位到验证码提示词元素: {e}")
 
             if await prompt_locator.count() > 0:
-                initial_target_word = await prompt_locator.inner_text()
-                print(f"[INFO] 成功获取目标验证词汇: {initial_target_word}")
+                target_word = await prompt_locator.inner_text()
+                print(f"[INFO] 成功获取目标验证词汇: {target_word}")
                 
                 option_buttons = page.locator('button.auth-captcha-option')
                 count = await option_buttons.count()
@@ -160,13 +163,8 @@ async def run_renew():
                         image_bytes_list.append(img_bytes)
                     print("[INFO] 已成功截取 4 个选项的图片，准备调用 Groq...")
                     
-                    correct_index = await ask_groq_for_captcha(image_bytes_list, initial_target_word)
-                    
-                    # 校验在等待 AI 期间验证码是否已经刷新改变了
-                    current_target_word = await prompt_locator.inner_text() if await prompt_locator.count() > 0 else ""
-                    if current_target_word != initial_target_word:
-                        print(f"[WARNING] 验证码在识别期间已刷新！原目标: '{initial_target_word}', 现目标: '{current_target_word}'，放弃本次点击。")
-                    elif correct_index is not None and 0 <= correct_index < 4:
+                    correct_index = await ask_groq_for_captcha(image_bytes_list, target_word)
+                    if correct_index is not None and 0 <= correct_index < 4:
                         print(f"[INFO] 准备点击第 {correct_index + 1} 个选项")
                         
                         await option_buttons.nth(correct_index).evaluate("el => el.click()")
