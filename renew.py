@@ -1,4 +1,4 @@
-#!/usr/init/env python3
+#!/usr/bin/env python3
 import asyncio
 import os
 import base64
@@ -43,8 +43,8 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
     }
 
     # 分两次请求：
-    # 第一次：只测第 1 张图 ([0])。如果是对的，模型会给出确认。
-    # 第二次：测第 2、3、4 张图 ([1, 2, 3])，模型返回 1、2、3 对应全局的第 2、3、4 个按钮。
+    # 第一次：只测第 1 张图 ([0])。
+    # 第二次：测第 2、3、4 张图 ([1, 2, 3])。
     batches = [
         ([0], 0),          
         ([1, 2, 3], 1)     
@@ -55,11 +55,10 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
             await asyncio.sleep(4)
 
         max_option_num = len(img_indices)
-        # 根据你的提示词，要求模型判断该图是否匹配 Target
         if idx_group == 0:
-            prompt_text = f"Target: '{target_word}'. Does this image match the target? Answer '1' if it matches, or '0' if it does NOT match. Answer ONLY 1 or 0 at the very end."
+            prompt_text = f"Target: '{target_word}'. Does this image match the target? Answer '1' if it matches, or '0' if it does NOT match. Answer ONLY 1 or 0 at the very end after reasoning."
         else:
-            prompt_text = f"Target: '{target_word}'. Look at these 3 options. Which option number (1, 2, or 3) is correct? Answer ONLY the single digit 1, 2, or 3 at the very end."
+            prompt_text = f"Target: '{target_word}'. Look at these 3 options. Which option number (1, 2, or 3) is correct? Answer ONLY the single digit 1, 2, or 3 at the very end after reasoning."
 
         content_parts = [
             {"type": "text", "text": prompt_text}
@@ -79,7 +78,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         payload = {
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": content_parts}],
-            "max_tokens": 150,
+            "max_tokens": 1000,  # 增大 token 限制，防止思维链被截断
             "temperature": 0
         }
 
@@ -96,12 +95,15 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     print(f"--- Groq 原始内容开始 (第 {idx_group + 1} 组) ---\n{raw_text}\n--- Groq 原始内容结束 ---")
                     send_tg_msg(f"<b>Groq 识别调试 (第 {idx_group + 1} 组)</b>\n目标: <code>{target_word}</code>\n<pre>{raw_text}</pre>")
                     
-                    clean_text = raw_text
-                    if "</think>" in clean_text:
-                        clean_text = clean_text.split("</think>")[-1].strip()
+                    # 严谨检查：必须包含 </think> 才说明模型完整输出了结论
+                    if "</think>" not in raw_text:
+                        print(f"[WARNING] 第 {idx_group + 1} 组返回内容被截断或没有思维链标签，跳过该次尝试...")
+                        break
+                    
+                    clean_text = raw_text.split("</think>")[-1].strip()
                     
                     if idx_group == 0:
-                        # 第一组：检查模型是否回答了 1（代表第一张图正确）
+                        # 第一组：检查结论部分是否精确包含 0 或 1
                         matches = re.findall(r'\b([01])\b', clean_text)
                         if matches:
                             val = matches[-1]
@@ -110,9 +112,11 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                                 return 0
                             else:
                                 print("[INFO] 第一张图不匹配，跳过，继续检测后面几张图...")
-                                break # 跳出当前重试，进入第二组
+                                break # 退出重试循环，进入第二组
+                        else:
+                            print(f"[WARNING] 第一组结论区未找到 0 或 1，结论文本: '{clean_text}'")
                     else:
-                        # 第二组：检查模型回答的 1, 2, 3
+                        # 第二组：检查结论部分是否包含 1, 2, 3
                         matches = re.findall(rf'\b([1-{max_option_num}])\b', clean_text)
                         if matches:
                             char = matches[-1]
@@ -266,7 +270,7 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                if hours_left < 20:
+                if hours_left < 2:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
