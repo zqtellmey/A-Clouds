@@ -42,9 +42,6 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         "Content-Type": "application/json"
     }
 
-    # 分两次请求：
-    # 第一次：只测第 1 张图 ([0])。
-    # 第二次：测第 2、3、4 张图 ([1, 2, 3])。
     batches = [
         ([0], 0),          
         ([1, 2, 3], 1)     
@@ -52,7 +49,8 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
 
     for idx_group, (img_indices, base_offset) in enumerate(batches):
         if idx_group > 0:
-            await asyncio.sleep(4)
+            # 组与组之间增加缓冲，防止连续触发 429
+            await asyncio.sleep(6)
 
         max_option_num = len(img_indices)
         if idx_group == 0:
@@ -78,7 +76,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
         payload = {
             "model": "qwen/qwen3.6-27b",
             "messages": [{"role": "user", "content": content_parts}],
-            "max_tokens": 1000,  # 增大 token 限制，防止思维链被截断
+            "max_tokens": 1000,
             "temperature": 0
         }
 
@@ -95,7 +93,6 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     print(f"--- Groq 原始内容开始 (第 {idx_group + 1} 组) ---\n{raw_text}\n--- Groq 原始内容结束 ---")
                     send_tg_msg(f"<b>Groq 识别调试 (第 {idx_group + 1} 组)</b>\n目标: <code>{target_word}</code>\n<pre>{raw_text}</pre>")
                     
-                    # 严谨检查：必须包含 </think> 才说明模型完整输出了结论
                     if "</think>" not in raw_text:
                         print(f"[WARNING] 第 {idx_group + 1} 组返回内容被截断或没有思维链标签，跳过该次尝试...")
                         break
@@ -103,7 +100,6 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     clean_text = raw_text.split("</think>")[-1].strip()
                     
                     if idx_group == 0:
-                        # 第一组：检查结论部分是否精确包含 0 或 1
                         matches = re.findall(r'\b([01])\b', clean_text)
                         if matches:
                             val = matches[-1]
@@ -112,11 +108,10 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                                 return 0
                             else:
                                 print("[INFO] 第一张图不匹配，跳过，继续检测后面几张图...")
-                                break # 退出重试循环，进入第二组
+                                break 
                         else:
                             print(f"[WARNING] 第一组结论区未找到 0 或 1，结论文本: '{clean_text}'")
                     else:
-                        # 第二组：检查结论部分是否包含 1, 2, 3
                         matches = re.findall(rf'\b([1-{max_option_num}])\b', clean_text)
                         if matches:
                             char = matches[-1]
@@ -126,8 +121,9 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     
                     break
                 elif response.status_code == 429:
-                    print("[WARNING] 触发 429 频率限制，等待重试...")
-                    await asyncio.sleep(12)
+                    sleep_time = 10 * attempt
+                    print(f"[WARNING] 触发 429 频率限制，等待 {sleep_time} 秒后重试...")
+                    await asyncio.sleep(sleep_time)
                 else:
                     print(f"[ERROR] Groq API 请求失败返回: {response.text}")
             except Exception as e:
