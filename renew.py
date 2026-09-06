@@ -1,4 +1,4 @@
-#!/usr/init/env python3
+#!/usr/bin/env python3
 import asyncio
 import os
 import base64
@@ -144,10 +144,15 @@ async def handle_captcha(page, is_dialog=False):
     print("[INFO] 等待验证结果或图形弹窗出现...")
     await asyncio.sleep(3)
     
-    is_already_checked = await captcha_container.get_attribute("aria-checked")
-    if is_already_checked == "true":
-        print("[INFO] 验证码直接打勾通过！")
-        return True
+    try:
+        is_already_checked = await captcha_container.get_attribute("aria-checked")
+        if is_already_checked == "true":
+            print("[INFO] 验证码直接打勾通过！")
+            return True
+    except:
+        if is_dialog and await page.locator('div[role="dialog"]').count() == 0:
+            print("[INFO] 弹窗已直接关闭，验证通过！")
+            return True
     
     print("[INFO] 未直接打勾，开始检测图形验证弹窗...")
     prompt_locator = base_locator.locator('div.auth-captcha-prompt strong')
@@ -178,11 +183,19 @@ async def handle_captcha(page, is_dialog=False):
                 await option_buttons.nth(correct_index).evaluate("el => el.click()")
                 await asyncio.sleep(3)
                 
+                # 如果是弹窗，点击后弹窗可能自动关闭销毁
+                if is_dialog and await page.locator('div[role="dialog"]').count() == 0:
+                    print("[INFO] 验证码通过后弹窗已自动关闭，验证成功！")
+                    return True
+                
                 try:
                     await base_locator.locator('div.auth-captcha-inner[role="checkbox"][aria-checked="true"]').wait_for(state="visible", timeout=10000)
                     print("[INFO] 验证码已成功勾选！")
                     return True
                 except:
+                    if is_dialog and await page.locator('div[role="dialog"]').count() == 0:
+                        print("[INFO] 弹窗已关闭，验证成功！")
+                        return True
                     print("[WARNING] 点击选项后验证码勾选状态等待超时")
             else:
                 print("[ERROR] 未能通过 Groq 确认正确选项")
@@ -191,8 +204,14 @@ async def handle_captcha(page, is_dialog=False):
     else:
         print("[ERROR] 页面上未找到任何验证码提示词节点")
     
-    is_checked = await captcha_container.get_attribute("aria-checked")
-    return is_checked == "true"
+    if is_dialog and await page.locator('div[role="dialog"]').count() == 0:
+        return True
+        
+    try:
+        is_checked = await captcha_container.get_attribute("aria-checked")
+        return is_checked == "true"
+    except:
+        return is_dialog
 
 async def run_renew():
     async with async_playwright() as p:
@@ -269,7 +288,7 @@ async def run_renew():
                 expires_at = datetime.fromisoformat(attrs['expires_at'])
                 hours_left = (expires_at - now).total_seconds() / 3600
                 
-                if hours_left < 2:
+                if hours_left < 20:
                     renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
                     if await renew_btn.count() > 0:
                         await renew_btn.scroll_into_view_if_needed()
