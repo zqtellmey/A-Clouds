@@ -92,11 +92,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     print(f"--- Groq 原始内容开始 (第 {idx_group + 1} 组) ---\n{raw_text}\n--- Groq 原始内容结束 ---")
                     send_tg_msg(f"<b>Groq 识别调试 (第 {idx_group + 1} 组)</b>\n目标: <code>{target_word}</code>\n<pre>{raw_text}</pre>")
                     
-                    if "</think>" not in raw_text:
-                        print(f"[WARNING] 第 {idx_group + 1} 组返回内容被截断或没有思维链标签，跳过该次尝试...")
-                        break
-                    
-                    clean_text = raw_text.split("</think>")[-1].strip()
+                    clean_text = raw_text.split("</think>")[-1].strip() if "</think>" in raw_text else raw_text.strip()
                     
                     if idx_group == 0:
                         matches = re.findall(r'\b([01])\b', clean_text)
