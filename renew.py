@@ -90,9 +90,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                     raw_text = res_json['choices'][0]['message']['content'].strip()
                     
                     print(f"--- Groq 原始内容开始 (第 {idx_group + 1} 组) ---\n{raw_text}\n--- Groq 原始内容结束 ---")
-                    send_tg_msg(f"**Groq 识别调试 (第 {idx_group + 1} 组)**\n目标: `{target_word}`\n
-{raw_text}
-")
+                    send_tg_msg(f"**Groq 识别调试 (第 {idx_group + 1} 组)**\n目标: `{target_word}`\n{raw_text}")
 
                 if "" not in raw_text:
                     print(f"[WARNING] 第 {idx_group + 1} 组返回内容被截断或没有思维链标签，跳过该次尝试...")
