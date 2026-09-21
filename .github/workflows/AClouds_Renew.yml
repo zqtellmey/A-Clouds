@@ -25,7 +25,7 @@ jobs:
 
       - name: 安装依赖
         run: |
-          pip install requests playwright
+          pip install requests playwright pillow
           playwright install chromium
 
       - name: 启用 WARP 网络
