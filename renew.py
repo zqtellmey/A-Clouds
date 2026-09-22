@@ -156,7 +156,7 @@ async def ask_groq_for_captcha(image_bytes_list, target_word, max_retries=3):
                         return choice_idx
                 
                 break
-            elif response.status_code == 429:
+                elif response.status_code == 429:
                 sleep_time = 10 * attempt
                 print(f"[WARNING] 触发 429 频率限制，等待 {sleep_time} 秒后重试...")
                 await asyncio.sleep(sleep_time)
