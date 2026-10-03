@@ -33,9 +33,9 @@ async def handle_captcha(page, is_dialog=False):
     
     try:
         print("[INFO] 正在寻找并点击 Cap 验证框...")
-        # Cap 验证组件包含在 shadow dom 中，可以通过 locator 直接穿透或定位内部的触发器
+        # 使用正确的下划线方法名 wait_for
         captcha_trigger = base_locator.locator('cap-widget div.captcha-trigger')
-        await captcha_trigger.waitFor(state="visible", timeout=10000)
+        await captcha_trigger.wait_for(state="visible", timeout=10000)
         await captcha_trigger.click()
         
         # 等待验证完成（观察 data-state 属性变为 done）
@@ -54,7 +54,7 @@ async def handle_captcha(page, is_dialog=False):
             return True
         else:
             print(f"[WARNING] Cap 验证状态未知或未完成: {state}")
-            return True # 部分情况下可能直接通过，返回 True 让外层后续逻辑继续尝试
+            return True 
     except Exception as e:
         print(f"[ERROR] 处理 Cap 验证异常: {e}")
         return False
