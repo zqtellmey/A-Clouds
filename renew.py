@@ -33,20 +33,16 @@ async def handle_captcha(page, is_dialog=False):
     
     try:
         print("[INFO] 正在寻找并点击 Cap 验证框...")
-        # 使用正确的下划线方法名 wait_for
         captcha_trigger = base_locator.locator('cap-widget div.captcha-trigger')
         await captcha_trigger.wait_for(state="visible", timeout=10000)
         await captcha_trigger.click()
         
-        # 等待验证完成（观察 data-state 属性变为 done）
         print("[INFO] 等待 Cap 验证通过...")
         await asyncio.sleep(4)
         
-        # 截图保存状态
         await page.screenshot(path="step_captcha_result.png")
         send_tg_photo("Cap 验证交互后的状态", "step_captcha_result.png")
         
-        # 检查是否成功通过（根据样式或属性判断，通常 data-state="done" 表示通过）
         captcha_widget = base_locator.locator('cap-widget div.captcha')
         state = await captcha_widget.get_attribute("data-state")
         if state == "done":
@@ -78,7 +74,7 @@ async def run_renew():
         await page.screenshot(path="step_fill_auth.png")
         send_tg_photo("2. 已填充账号密码", "step_fill_auth.png")
         
-        # 执行 Cap 验证
+        # 执行登录页的 Cap 验证
         await handle_captcha(page, is_dialog=False)
         
         await page.screenshot(path="step2.png")
@@ -95,26 +91,7 @@ async def run_renew():
         await page.screenshot(path="step3.png")
         send_tg_photo("4. 登录完成后控制台页面", "step3.png")
         
-        await page.goto("https://aclclouds.com/dashboard/projects", wait_until="networkidle")
-        reactivate_btns = page.locator('button:has-text("Reactivate")')
-        r_count = await reactivate_btns.count()
-        if r_count > 0:
-            for i in range(r_count):
-                print(f"[INFO] 正在执行第 {i+1} 个 Reactivate...")
-                await reactivate_btns.nth(i).click()
-                await asyncio.sleep(2)
-                
-                reactivate_success = await handle_captcha(page, is_dialog=True)
-                if reactivate_success:
-                    print(f"[INFO] 第 {i+1} 个 Reactivate 验证通过！")
-                else:
-                    print(f"[WARNING] 第 {i+1} 个 Reactivate 验证未通过或超时")
-                    
-                await asyncio.sleep(2)
-                await page.screenshot(path=f"react_final_{i}.png")
-                send_tg_photo(f"已执行 Reactivate 动作 {i+1} 及验证", f"react_final_{i}.png")
-                await asyncio.sleep(3)
-                
+        # 通过 API 获取服务器列表，直接访问每个服务器的详情页进行续期/激活
         resp = await context.request.get("https://dash.aclclouds.com/api/client")
         if resp.ok:
             servers = (await resp.json()).get("data", [])
@@ -122,29 +99,47 @@ async def run_renew():
             for server in servers:
                 attrs = server['attributes']
                 s_name = attrs['name']
-                hours_left = (datetime.fromisoformat(attrs['expires_at']) - now).total_seconds() / 3600
-                if hours_left < 2:
-                    renew_btn = page.locator('button.client-btn--secondary:has-text("Renew")').first
-                    if await renew_btn.count() > 0:
-                        await renew_btn.scroll_into_view_if_needed()
-                        await renew_btn.evaluate("el => el.click()")
-                        await asyncio.sleep(2)
-                        await handle_captcha(page, is_dialog=True)
-                        await asyncio.sleep(2)
-                        await page.screenshot(path="renew_final_result.png")
-                        send_tg_photo(f"已尝试完成 {s_name} 的 Renew 交互式验证", "renew_final_result.png")
-                        await asyncio.sleep(5)
-                        new_resp = await context.request.get("https://dash.aclclouds.com/api/client")
-                        if new_resp.ok:
-                            for n_s in (await new_resp.json()).get("data", []):
-                                if n_s['attributes']['name'] == s_name:
-                                    n_h = (datetime.fromisoformat(n_s['attributes']['expires_at']) - now).total_seconds() / 3600
-                                    send_tg_msg(f"服务器: {s_name}\n状态: ✅ 续期后剩余时间: {n_h:.2f} 小时")
+                # 获取服务器的唯一标识 ID (用于拼接详情页 URL)
+                s_id = attrs.get('identifier') or attrs.get('uuid') or server.get('id')
+                if not s_id:
+                    continue
+                
+                # 计算剩余时间
+                expires_at = attrs.get('expires_at')
+                hours_left = 999.0
+                if expires_at:
+                    hours_left = (datetime.fromisoformat(expires_at) - now).total_seconds() / 3600
+                
+                # 如果剩余时间小于 2 小时，或者可以统一进入详情页检查是否有续期/激活按钮
+                print(f"[INFO] 检查服务器: {s_name} (剩余时间: {hours_left:.2f} 小时)")
+                server_url = f"https://aclclouds.com/server/{s_id}"
+                await page.goto(server_url, wait_until="networkidle")
+                await asyncio.sleep(2)
+                
+                # 寻找激活或续期按钮（支持中、法、英文匹配：Renouveler、Reactivate、Renew）
+                action_btn = page.locator('button:has-text("Renouveler"), button:has-text("Reactivate"), button:has-text("Renew")').first
+                
+                if await action_btn.count() > 0 and await action_btn.is_visible():
+                    print(f"[INFO] 发现服务器 {s_name} 的续期/激活按钮，正在点击...")
+                    await action_btn.scroll_into_view_if_needed()
+                    await action_btn.click()
+                    await asyncio.sleep(2)
+                    
+                    # 处理弹出的 Cap 验证
+                    success = await handle_captcha(page, is_dialog=True)
+                    if success:
+                        print(f"[INFO] 服务器 {s_name} 续期/激活验证通过！")
+                        send_tg_msg(f"服务器: {s_name}\n状态: ✅ 续期/激活成功")
                     else:
-                        await page.screenshot(path="not_found.png")
-                        send_tg_photo(f"服务器 {s_name} 剩余 {hours_left:.2f} 小时，但未找到 Renew 按钮！", "not_found.png")
+                        print(f"[WARNING] 服务器 {s_name} 续期/激活验证未通过")
+                        send_tg_msg(f"服务器: {s_name}\n状态: ❌ 续期/激活验证失败")
+                        
+                    await asyncio.sleep(3)
+                    await page.screenshot(path=f"server_{s_id}_result.png")
+                    send_tg_photo(f"已执行服务器 {s_name} 的交互式验证", f"server_{s_id}_result.png")
                 else:
-                    send_tg_msg(f"服务器: {s_name}\n剩余时间: {hours_left:.2f} 小时\n状态: ℹ️ 无需续期操作")
+                    print(f"[INFO] 服务器 {s_name} 当前无需操作（未找到续期/激活按钮）")
+        
         await browser.close()
 
 if __name__ == "__main__":
